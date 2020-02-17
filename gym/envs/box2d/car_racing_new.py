@@ -101,7 +101,10 @@ class FrictionDetector(contactListener):
         else:
             obj.tiles.remove(tile)
             # Registering last contact with track
-            self.env.update_contact_with_track()  
+            self.env.update_contact_with_track() 
+            if tile.is_last_tile:
+                # Registering last tile visited
+                self.env.update_last_tile_visited() 
             # print tile.road_friction, "DEL", len(obj.tiles) -- should delete to zero when on grass (this works)
 
 class NewCarRacing(gym.Env, EzPickle):
@@ -123,8 +126,9 @@ class NewCarRacing(gym.Env, EzPickle):
         self.reward = 0.0
         self.prev_reward = 0.0
         self.verbose = verbose
+        self.last_tile_visited = False
         # Max time out car is allowed to be out of the track or still
-        self.max_time_out = 1.5
+        self.max_time_out = 1.2
         self.fd_tile = fixtureDef(
                 shape = polygonShape(vertices=
                     [(0, 0),(1, 0),(1, -1),(0, -1)]))
@@ -151,9 +155,14 @@ class NewCarRacing(gym.Env, EzPickle):
             return True
         return False
 
+    def is_last_tile_visited(self):
+        return self.last_tile_visited
+
     def update_contact_with_track(self):
-        print('Update contact with track: ' + str(self.t))
         self.last_touch_with_track = self.t
+
+    def update_last_tile_visited(self):
+        self.last_tile_visited = True
 
     def _create_track(self):
         CHECKPOINTS = 12
@@ -263,6 +272,11 @@ class NewCarRacing(gym.Env, EzPickle):
             t.road_visited = False
             t.road_friction = 1.0
             t.fixtures[0].sensor = True
+            t.id = i
+            if i == len(track) - 1:
+                t.is_last_tile = True
+            else:
+                t.is_last_tile = False
             self.road_poly.append(( [road1_l, road1_r, road2_r, road2_l], t.color ))
             self.road.append(t)
 
@@ -426,6 +440,7 @@ class NewCarRacing(gym.Env, EzPickle):
     def reset(self):
         self.seed(5)
         self._destroy()
+        self.last_tile_visited = False
         self.last_touch_with_track = 0.0
         self.reward = 0.0
         self.prev_reward = 0.0
@@ -478,6 +493,9 @@ class NewCarRacing(gym.Env, EzPickle):
                         + str(self.max_time_out) + ' seconds')
                 done = True
                 step_reward = -100
+            if self.is_last_tile_visited():
+                print('Done: last tile visited')
+                done = True
 
         return self.state, step_reward, done, {}
 
