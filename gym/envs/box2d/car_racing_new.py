@@ -492,7 +492,7 @@ class NewCarRacing(gym.Env, EzPickle):
                 print('Done: car was outside track or still for more than ' 
                         + str(self.max_time_out) + ' seconds')
                 done = True
-                step_reward = -100
+                # step_reward = -100
             if self.is_last_tile_visited():
                 print('Done: last tile visited')
                 done = True
