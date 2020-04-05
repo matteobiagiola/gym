@@ -115,7 +115,8 @@ class NewCarRacing(gym.Env, EzPickle):
 
     def __init__(self, verbose=1):
         EzPickle.__init__(self)
-        self.seed(5)
+        # self.seed(5)
+        self.seed()
         self.contactListener_keepref = FrictionDetector(self)
         self.world = Box2D.b2World((0,0), contactListener=self.contactListener_keepref)
         self.viewer = None
@@ -149,8 +150,7 @@ class NewCarRacing(gym.Env, EzPickle):
         self.car.destroy()
 
     def is_outside_or_still(self):
-        if self.t - self.last_touch_with_track > self.max_time_out and \
-                self.max_time_out > 0.0:
+        if self.t - self.last_touch_with_track > self.max_time_out > 0.0:
             # if too many seconds outside the track
             return True
         return False
@@ -301,9 +301,9 @@ class NewCarRacing(gym.Env, EzPickle):
             checkpoints.append( (alpha, rad*math.cos(alpha), rad*math.sin(alpha)) )
 
         # print "\n".join(str(h) for h in checkpoints)
-        self.road_poly = [ (    # uncomment this to see checkpoints
-           [ (tx,ty) for a,tx,ty in checkpoints ],
-           (0.7,0.7,0.9) ) ]
+        # self.road_poly = [ (    # uncomment this to see checkpoints
+        #    [ (tx,ty) for a,tx,ty in checkpoints ],
+        #    (0.7,0.7,0.9) ) ]
         self.road = []
 
         # Go from one checkpoint to another to create track
@@ -425,6 +425,13 @@ class NewCarRacing(gym.Env, EzPickle):
             t.road_visited = False
             t.road_friction = 1.0
             t.fixtures[0].sensor = True
+
+            t.id = i
+            if i == len(track) - 1:
+                t.is_last_tile = True
+            else:
+                t.is_last_tile = False
+                
             self.road_poly.append(( [road1_l, road1_r, road2_r, road2_l], t.color ))
             self.road.append(t)
             if border[i]:
@@ -438,7 +445,8 @@ class NewCarRacing(gym.Env, EzPickle):
         return True
 
     def reset(self):
-        self.seed(5)
+        # self.seed(5)
+        self.seed()
         self._destroy()
         self.last_tile_visited = False
         self.last_touch_with_track = 0.0
@@ -449,7 +457,8 @@ class NewCarRacing(gym.Env, EzPickle):
         self.road_poly = []
 
         while True:
-            success = self._create_track()
+            success = self._create_track_original()
+            # success = self._create_track()
             if success:
                 break
             if self.verbose == 1:
@@ -480,21 +489,25 @@ class NewCarRacing(gym.Env, EzPickle):
             step_reward = self.reward - self.prev_reward
             self.prev_reward = self.reward
             if self.tile_visited_count==len(self.track):
-                print('All tiles visited')
+                if self.verbose == 1:
+                    print('All tiles visited')
                 done = True
             x, y = self.car.hull.position
             # print('t: ' + str(self.t) + ', x: ' + str(x) + ", y: " + str(y))
             if abs(x) > PLAYFIELD or abs(y) > PLAYFIELD:
-                print('Done PLAYFIELD: x - ' + str(x) + '; y - ' + str(y) + '; PLAYFIELD - ' + str(PLAYFIELD))
+                if self.verbose == 1:
+                    print('Done PLAYFIELD: x - ' + str(x) + '; y - ' + str(y) + '; PLAYFIELD - ' + str(PLAYFIELD))
                 done = True
                 step_reward = -100
             if self.is_outside_or_still():
-                print('Done: car was outside track or still for more than ' 
-                        + str(self.max_time_out) + ' seconds')
+                if self.verbose == 1:
+                    print('Done: car was outside track or still for more than ' 
+                            + str(self.max_time_out) + ' seconds')
                 done = True
                 # step_reward = -100
             if self.is_last_tile_visited():
-                print('Done: last tile visited')
+                if self.verbose == 1:
+                    print('Done: last tile visited')
                 done = True
 
         return self.state, step_reward, done, {}
