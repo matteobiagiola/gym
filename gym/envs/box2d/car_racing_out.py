@@ -3,6 +3,7 @@ import numpy as np
 
 import Box2D
 from Box2D.b2 import (edgeShape, circleShape, fixtureDef, polygonShape, revoluteJointDef, contactListener)
+from gym.envs.box2d.road_generator.spline.catmull_rom_spline import CatmullRomSpline
 
 from gym.envs.box2d.road_generator.circular_checkpoints_generator import CircularCheckpointsGenerator
 from gym.envs.box2d.road_generator.spline.pt_spline import PtSpline
@@ -61,12 +62,13 @@ PLAYFIELD = 2000 / SCALE  # Game over boundary
 FPS = 50  # Frames per second
 ZOOM = 2.7  # Camera zoom
 # ZOOM        = 0.3        # Camera zoom
-ZOOM_FOLLOW = True  # Set to False for fixed view (don't use zoom)
+ZOOM_FOLLOW = False  # Set to False for fixed view (don't use zoom)
+ZOOM_FINAL = 16  # Camera zoom final value (after animation) if ZOOM_FOLLOW = False
 
 TRACK_DETAIL_STEP = 21 / SCALE
 TRACK_TURN_RATE = 0.31
-TRACK_WIDTH = 40 / SCALE
-# TRACK_WIDTH = 60/SCALE
+# TRACK_WIDTH = 40 / SCALE
+TRACK_WIDTH = 70/SCALE
 BORDER = 8 / SCALE
 BORDER_MIN_COUNT = 4
 
@@ -151,7 +153,7 @@ class CarRacingOut(gym.Env, EzPickle):
             assert chk_generator is not None
             self.num_checkpoints = num_checkpoints
             self.road_generator = RoadGenerator(checkpoints_generator=chk_generator, spline=spline)
-            self.spline_resolution = 30
+            self.spline_resolution = 20
             self.track_closed = track_closed
         if import_track and generate_track:
             raise ValueError('Either tracks are imported or generated. Choose one!')
@@ -175,11 +177,10 @@ class CarRacingOut(gym.Env, EzPickle):
         self.id_tile_visited = -1
         self.nsteps = -1
         # Max time out car is allowed to be out of the track or still
-        self.max_time_out = 1.2
+        self.max_time_out = 2.0
         self.fd_tile = fixtureDef(
             shape=polygonShape(vertices=
                                [(0, 0), (1, 0), (1, -1), (0, -1)]))
-
         self.action_space = spaces.Box(np.array([-1, 0, 0]), np.array([+1, +1, +1]),
                                        dtype=np.float32)  # steer, gas, brake
         self.observation_space = spaces.Box(low=0, high=255, shape=(STATE_H, STATE_W, 3), dtype=np.uint8)
@@ -514,8 +515,10 @@ class CarRacingOut(gym.Env, EzPickle):
             self.transform = rendering.Transform()
 
         if "t" not in self.__dict__: return  # reset() not called yet
-
-        zoom = 0.1 * SCALE * max(1 - self.t, 0) + ZOOM * SCALE * min(self.t, 1)  # Animate zoom first second
+        if ZOOM_FOLLOW:
+            zoom = 0.1 * SCALE * max(1 - self.t, 0) + ZOOM * SCALE * min(self.t, 1)  # Animate zoom first second
+        else:
+            zoom = ZOOM_FINAL
         zoom_state = ZOOM * SCALE * STATE_W / WINDOW_W
         zoom_video = ZOOM * SCALE * VIDEO_W / WINDOW_W
         scroll_x = self.car.hull.position[0]
@@ -657,16 +660,17 @@ if __name__ == "__main__":
         if k == key.DOWN:  a[2] = 0
 
 
-    # dir_with_tracks = '/Users/matteobiagiola/workspace/carracing/road-generator/tracks_simple_pt_splines'
-    # env = CarRacingOut(verbose=0, import_track=True, dir_with_tracks=dir_with_tracks)
+    dir_with_tracks = '/Users/matteobiagiola/workspace/carracing/road-generator/tracks_simple_pt_splines'
+    env = CarRacingOut(verbose=0, import_track=True, dir_with_tracks=dir_with_tracks)
 
-    radius = 10.0
-    spline = PtSpline(radius)
-    rad_percentage = 0.5
-    chk_generator = CircularCheckpointsGenerator(randomize_alpha=False, randomize_radius=True,
-                                                 track_rad_percentage=rad_percentage)
-    env = CarRacingOut(verbose=0, generate_track=True, spline=spline,
-                       chk_generator=chk_generator, num_checkpoints=5, track_closed=False)
+    # radius = 10.0
+    # spline = PtSpline(radius)
+    # spline = CatmullRomSpline()
+    # rad_percentage = 0.5
+    # chk_generator = CircularCheckpointsGenerator(randomize_alpha=False, randomize_radius=True,
+    #                                              track_rad_percentage=rad_percentage)
+    # env = CarRacingOut(verbose=0, generate_track=True, spline=spline,
+    #                    chk_generator=chk_generator, num_checkpoints=8, track_closed=False)
 
     # env = CarRacingOut()
     env.render()
