@@ -177,7 +177,7 @@ class CarRacingOut(gym.Env, EzPickle):
         self.id_tile_visited = -1
         self.nsteps = -1
         # Max time out car is allowed to be out of the track or still
-        self.max_time_out = 2.0
+        self.max_time_out = 1.2
         self.fd_tile = fixtureDef(
             shape=polygonShape(vertices=
                                [(0, 0), (1, 0), (1, -1), (0, -1)]))
@@ -496,7 +496,6 @@ class CarRacingOut(gym.Env, EzPickle):
                     print('Done: car was outside track or still for more than '
                           + str(self.max_time_out) + ' seconds')
                 done = True
-                # step_reward = -100
             if self.is_last_tile_visited():
                 if self.verbose == 1:
                     print('Done: last tile visited')
