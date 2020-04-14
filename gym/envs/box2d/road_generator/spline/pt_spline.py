@@ -175,9 +175,14 @@ class PtSpline(Spline):
             new_resolution = _make_resolution_proportionate(norm_straight_road, max_norm_straight_road, resolution)
             if new_resolution <= 3:
                 new_resolution = 4
-            straight_road = np.linspace(start_point.get_point(),
-                                        end_point.get_point(),
-                                        new_resolution)
+            if i == 0:
+                straight_road = np.linspace(start_point.get_point(),
+                                            end_point.get_point(),
+                                            resolution)
+            else:
+                straight_road = np.linspace(start_point.get_point(),
+                                            end_point.get_point(),
+                                            new_resolution)
             track.extend(straight_road)
 
             if i == len(points) - 3:

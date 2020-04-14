@@ -62,7 +62,7 @@ PLAYFIELD = 2000 / SCALE  # Game over boundary
 FPS = 50  # Frames per second
 ZOOM = 2.7  # Camera zoom
 # ZOOM        = 0.3        # Camera zoom
-ZOOM_FOLLOW = False  # Set to False for fixed view (don't use zoom)
+ZOOM_FOLLOW = True  # Set to False for fixed view (don't use zoom)
 ZOOM_FINAL = 16  # Camera zoom final value (after animation) if ZOOM_FOLLOW = False
 
 TRACK_DETAIL_STEP = 21 / SCALE
@@ -177,7 +177,7 @@ class CarRacingOut(gym.Env, EzPickle):
         self.id_tile_visited = -1
         self.nsteps = -1
         # Max time out car is allowed to be out of the track or still
-        self.max_time_out = 1.2
+        self.max_time_out = 2.0
         self.fd_tile = fixtureDef(
             shape=polygonShape(vertices=
                                [(0, 0), (1, 0), (1, -1), (0, -1)]))
@@ -659,8 +659,8 @@ if __name__ == "__main__":
         if k == key.DOWN:  a[2] = 0
 
 
-    dir_with_tracks = '/Users/matteobiagiola/workspace/carracing/road-generator/tracks_simple_pt_splines'
-    env = CarRacingOut(verbose=0, import_track=True, dir_with_tracks=dir_with_tracks)
+    # dir_with_tracks = '/Users/matteobiagiola/workspace/carracing/road-generator/tracks_simple_pt_splines'
+    # env = CarRacingOut(verbose=0, import_track=True, dir_with_tracks=dir_with_tracks)
 
     # radius = 10.0
     # spline = PtSpline(radius)
@@ -671,7 +671,7 @@ if __name__ == "__main__":
     # env = CarRacingOut(verbose=0, generate_track=True, spline=spline,
     #                    chk_generator=chk_generator, num_checkpoints=8, track_closed=False)
 
-    # env = CarRacingOut()
+    env = CarRacingOut()
     env.render()
     env.viewer.window.on_key_press = key_press
     env.viewer.window.on_key_release = key_release
