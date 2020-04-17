@@ -187,6 +187,7 @@ class CarRacingOut(gym.Env, EzPickle):
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
+        # self.created_seed = seed
         return [seed]
 
     def _destroy(self):
@@ -244,6 +245,7 @@ class CarRacingOut(gym.Env, EzPickle):
         if self.import_track:
             track = self._import_track()
         elif self.generate_track:
+            # print('np_random:', self.np_random.get_state()[2])
             track = self.road_generator \
                 .generate_road(self.num_checkpoints, self.spline_resolution, self.np_random,
                                TRACK_RAD, looped=self.track_closed)
@@ -410,6 +412,8 @@ class CarRacingOut(gym.Env, EzPickle):
                 print("retry to generate track (normal if there are not many of this messages)")
         self.car = Car(self.world, *self.track[0][1:4])
 
+        # self.seed(self.created_seed)
+        
         return self.step(None)[0]
 
     # does not work yet
@@ -662,16 +666,16 @@ if __name__ == "__main__":
     # dir_with_tracks = '/Users/matteobiagiola/workspace/carracing/road-generator/tracks_simple_pt_splines'
     # env = CarRacingOut(verbose=0, import_track=True, dir_with_tracks=dir_with_tracks)
 
-    # radius = 10.0
-    # spline = PtSpline(radius)
+    radius = 25.0
+    spline = PtSpline(radius)
     # spline = CatmullRomSpline()
-    # rad_percentage = 0.5
-    # chk_generator = CircularCheckpointsGenerator(randomize_alpha=False, randomize_radius=True,
-    #                                              track_rad_percentage=rad_percentage)
-    # env = CarRacingOut(verbose=0, generate_track=True, spline=spline,
-    #                    chk_generator=chk_generator, num_checkpoints=8, track_closed=False)
+    rad_percentage = 0.6
+    chk_generator = CircularCheckpointsGenerator(randomize_alpha=False, randomize_radius=True, randomize_first_curve_direction=True,
+                                                 track_rad_percentage=rad_percentage)
+    env = CarRacingOut(verbose=0, generate_track=True, spline=spline,
+                       chk_generator=chk_generator, num_checkpoints=3, track_closed=False)
 
-    env = CarRacingOut()
+    # env = CarRacingOut()
     env.render()
     env.viewer.window.on_key_press = key_press
     env.viewer.window.on_key_release = key_release
