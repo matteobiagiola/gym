@@ -10,7 +10,8 @@ from numpy.random.mtrand import RandomState
 
 class CircularCheckpointsGenerator(CheckpointsGenerator):
 
-    def __init__(self, randomize_alpha=True, randomize_radius=True, track_rad_percentage: float = 1 / 2, randomize_first_curve_direction=False):
+    def __init__(self, randomize_alpha=True, randomize_radius=True, track_rad_percentage: float = 1 / 2,
+                 randomize_first_curve_direction=False):
         self.randomize_alpha = randomize_alpha
         self.randomize_radius = randomize_radius
         self.track_rad_percentage = track_rad_percentage
@@ -21,7 +22,6 @@ class CircularCheckpointsGenerator(CheckpointsGenerator):
         checkpoints = []
         first_curve_direction = 'left'
         if self.randomize_first_curve_direction:
-            track_rad = track_rad / 2
             if np_random.uniform(0, 1) <= 0.5:
                 first_curve_direction = 'right'
             else:

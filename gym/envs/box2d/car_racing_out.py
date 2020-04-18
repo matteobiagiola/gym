@@ -3,6 +3,8 @@ import numpy as np
 
 import Box2D
 from Box2D.b2 import (edgeShape, circleShape, fixtureDef, polygonShape, revoluteJointDef, contactListener)
+
+from gym.envs.box2d.road_generator.three_checkpoints_generator import ThreeCheckpointsGenerator
 from gym.envs.box2d.road_generator.spline.catmull_rom_spline import CatmullRomSpline
 
 from gym.envs.box2d.road_generator.circular_checkpoints_generator import CircularCheckpointsGenerator
@@ -68,7 +70,7 @@ ZOOM_FINAL = 16  # Camera zoom final value (after animation) if ZOOM_FOLLOW = Fa
 TRACK_DETAIL_STEP = 21 / SCALE
 TRACK_TURN_RATE = 0.31
 # TRACK_WIDTH = 40 / SCALE
-TRACK_WIDTH = 70/SCALE
+TRACK_WIDTH = 70 / SCALE
 BORDER = 8 / SCALE
 BORDER_MIN_COUNT = 4
 
@@ -177,7 +179,7 @@ class CarRacingOut(gym.Env, EzPickle):
         self.id_tile_visited = -1
         self.nsteps = -1
         # Max time out car is allowed to be out of the track or still
-        self.max_time_out = 2.0
+        self.max_time_out = 1.2
         self.fd_tile = fixtureDef(
             shape=polygonShape(vertices=
                                [(0, 0), (1, 0), (1, -1), (0, -1)]))
@@ -413,7 +415,7 @@ class CarRacingOut(gym.Env, EzPickle):
         self.car = Car(self.world, *self.track[0][1:4])
 
         # self.seed(self.created_seed)
-        
+
         return self.step(None)[0]
 
     # does not work yet
@@ -647,18 +649,32 @@ if __name__ == "__main__":
     a = np.array([0.0, 0.0, 0.0])
 
 
+    # def key_press(k, mod):
+    #     global restart
+    #     if k == 0xff0d: restart = True
+    #     if k == key.LEFT:  a[0] = -1.0
+    #     if k == key.RIGHT: a[0] = +1.0
+    #     if k == key.UP:    a[1] = +1.0
+    #     if k == key.DOWN:  a[2] = +0.8  # set 1.0 for wheels to block to zero rotation
+
+    # def key_release(k, mod):
+    #     if k == key.LEFT and a[0] == -1.0: a[0] = 0
+    #     if k == key.RIGHT and a[0] == +1.0: a[0] = 0
+    #     if k == key.UP:    a[1] = 0
+    #     if k == key.DOWN:  a[2] = 0
+
     def key_press(k, mod):
         global restart
         if k == 0xff0d: restart = True
-        if k == key.LEFT:  a[0] = -1.0
-        if k == key.RIGHT: a[0] = +1.0
-        if k == key.UP:    a[1] = +1.0
-        if k == key.DOWN:  a[2] = +0.8  # set 1.0 for wheels to block to zero rotation
+        if k == key.LEFT:  a[0] = -0.7
+        if k == key.RIGHT: a[0] = +0.7
+        if k == key.UP:    a[1] = +0.7
+        if k == key.DOWN:  a[2] = +0.7  # set 1.0 for wheels to block to zero rotation
 
 
     def key_release(k, mod):
-        if k == key.LEFT and a[0] == -1.0: a[0] = 0
-        if k == key.RIGHT and a[0] == +1.0: a[0] = 0
+        if k == key.LEFT and a[0] == -0.7: a[0] = 0
+        if k == key.RIGHT and a[0] == +0.7: a[0] = 0
         if k == key.UP:    a[1] = 0
         if k == key.DOWN:  a[2] = 0
 
@@ -666,12 +682,13 @@ if __name__ == "__main__":
     # dir_with_tracks = '/Users/matteobiagiola/workspace/carracing/road-generator/tracks_simple_pt_splines'
     # env = CarRacingOut(verbose=0, import_track=True, dir_with_tracks=dir_with_tracks)
 
-    radius = 25.0
+    radius = 15.0
     spline = PtSpline(radius)
     # spline = CatmullRomSpline()
-    rad_percentage = 0.6
-    chk_generator = CircularCheckpointsGenerator(randomize_alpha=False, randomize_radius=True, randomize_first_curve_direction=True,
-                                                 track_rad_percentage=rad_percentage)
+    rad_percentage = 0.5
+    chk_generator = ThreeCheckpointsGenerator(randomize_alpha=True, randomize_radius=True,
+                                              randomize_first_curve_direction=True,
+                                              track_rad_percentage=rad_percentage)
     env = CarRacingOut(verbose=0, generate_track=True, spline=spline,
                        chk_generator=chk_generator, num_checkpoints=3, track_closed=False)
 
@@ -682,6 +699,7 @@ if __name__ == "__main__":
     record_video = False
     if record_video:
         from gym.wrappers.monitor import Monitor
+
         env = Monitor(env, '/tmp/video-test', force=True)
     isopen = True
     while isopen:

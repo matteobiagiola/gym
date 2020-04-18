@@ -66,6 +66,9 @@ def _find_tangent_point(_x_arc: np.ndarray, _y_arc: np.ndarray, _theta_arc: np.n
 
 def _has_pinnacle(_start_point: Point, _end_point: Point, _x_arc: np.ndarray,
                   _y_arc: np.ndarray, _resolution: int) -> bool:
+    if len(_y_arc) == 1:
+        return False
+
     next_straight_road = np.linspace(_start_point.get_point(),
                                      _end_point.get_point(),
                                      _resolution)
@@ -97,14 +100,11 @@ def _compute_arc(_radius: float, _start_angle: float, _end_angle: float, _resolu
 
 def _try_to_compute_curve(_start_point: Point, _end_point: Point, _next_point: Point,
                           _left_curve: bool, _resolution: int, _sampling_resolution: int,
-                          _radius: float, _max_norm_arc_length: float,
-                          _straight_road: np.ndarray, _warn: bool) \
+                          starting_radius: float, _radius: float, _max_norm_arc_length: float,
+                          _straight_road: np.ndarray) \
         -> Tuple[Point, np.ndarray, np.ndarray]:
     c, alt_c = _compute_circle_center(_radius, _start_point, _end_point, _left_curve)
     x_circle, y_circle, theta_circle = _compute_arc(_radius, 0.0, 2 * np.pi, _sampling_resolution, c)
-
-    straight_road_x, straight_road_y = zip(*_straight_road)
-    point_at_alpha_zero = Point(c.x + _radius, c.y)
 
     theta_offset = _find_offset(x_circle, y_circle, theta_circle, _end_point)
     if _left_curve:
@@ -120,8 +120,10 @@ def _try_to_compute_curve(_start_point: Point, _end_point: Point, _next_point: P
         angle = abs(last_angle - theta_offset)
         arc_length = (np.pi * _radius * 2) * (angle / (2 * np.pi))
         arc_resolution = _make_resolution_proportionate(arc_length, _max_norm_arc_length, _resolution)
-        if arc_resolution <= 5:
-            arc_resolution = 6
+        if _radius > starting_radius and arc_resolution <= 6:
+            arc_resolution = 7
+        elif arc_resolution <= 1:
+            arc_resolution = 2
         x_arc, y_arc, theta_arc = _compute_arc(_radius, theta_offset, last_angle, arc_resolution, c)
         if math.isclose(theta_offset - 2 * np.pi, last_angle):
             previous_start_point = None
@@ -176,41 +178,38 @@ class PtSpline(Spline):
             if new_resolution <= 3:
                 new_resolution = 4
             straight_road = np.linspace(start_point.get_point(),
-                                            end_point.get_point(),
-                                            new_resolution)
+                                        end_point.get_point(),
+                                        new_resolution)
             track.extend(straight_road)
 
             if i == len(points) - 3:
                 break
             left_curve = _is_curve_left(start_point, end_point, next_point)
 
-            warn = True
             previous_start_point, x_arc, y_arc = \
                 _try_to_compute_curve(start_point, end_point, next_point, left_curve, resolution, sampling_resolution,
-                                      self.radius, self.max_norm_arc_length, straight_road, warn)
+                                      self.radius, self.radius, self.max_norm_arc_length, straight_road)
 
-            warn = False
-            count = 5
+            count = 6
             radius = self.radius
             while previous_start_point is None and count >= 0:
                 radius = radius + 2.0
                 max_norm_arc_length = 2 * np.pi * radius
                 previous_start_point, x_arc, y_arc = \
                     _try_to_compute_curve(start_point, end_point, next_point, left_curve, resolution,
-                                          sampling_resolution,
-                                          radius, max_norm_arc_length, straight_road, warn)
+                                          sampling_resolution, self.radius, radius, max_norm_arc_length, straight_road)
                 count -= 1
 
             if count == 0:
-                count = 5
+                count = 6
                 radius = self.radius
                 while previous_start_point is None and count >= 0 and radius >= 1.0:
                     radius = radius - 2.0
                     max_norm_arc_length = 2 * np.pi * radius
                     previous_start_point, x_arc, y_arc = \
                         _try_to_compute_curve(start_point, end_point, next_point, left_curve, resolution,
-                                              sampling_resolution,
-                                              radius, max_norm_arc_length, straight_road, warn)
+                                              sampling_resolution, self.radius, radius, max_norm_arc_length,
+                                              straight_road)
                     count -= 1
 
             if previous_start_point is not None:
