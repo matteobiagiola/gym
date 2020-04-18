@@ -105,6 +105,7 @@ class FrictionDetector(contactListener):
         tile.color[0] = ROAD_COLOR[0]
         tile.color[1] = ROAD_COLOR[1]
         tile.color[2] = ROAD_COLOR[2]
+
         if not obj or "tiles" not in obj.__dict__:
             return
         if begin:
@@ -117,6 +118,8 @@ class FrictionDetector(contactListener):
                 self.env._tile_visited(tile.id)
         else:
             obj.tiles.remove(tile)
+            self.env._register_number_of_object_tiles(obj.tiles)
+            # print(tile.road_friction, "DEL", len(obj.tiles))  # -- should delete to zero when on grass (this works)
             # Registering last contact with track
             self.env.update_contact_with_track()
             if tile.is_last_tile:
@@ -177,6 +180,7 @@ class CarRacingOut(gym.Env, EzPickle):
         self.last_tile_visited = False
         self.tile_vertices = []
         self.id_tile_visited = -1
+        self.num_object_tiles = -1
         self.nsteps = -1
         # Max time out car is allowed to be out of the track or still
         self.max_time_out = 1.2
@@ -214,6 +218,9 @@ class CarRacingOut(gym.Env, EzPickle):
 
     def _tile_visited(self, tile_id):
         self.id_tile_visited = tile_id
+
+    def _register_number_of_object_tiles(self, object_tiles):
+        self.num_object_tiles = len(object_tiles)
 
     def update_last_tile_visited(self):
         self.last_tile_visited = True
@@ -404,6 +411,7 @@ class CarRacingOut(gym.Env, EzPickle):
         self.t = 0.0
         self.road_poly = []
         self.id_tile_visited = -1
+        self.num_object_tiles = -1
         self.nsteps = -1
 
         while True:
@@ -497,11 +505,14 @@ class CarRacingOut(gym.Env, EzPickle):
             if abs(x) > PLAYFIELD or abs(y) > PLAYFIELD:
                 done = True
                 step_reward = -100
-            if self.is_outside_or_still():
-                if self.verbose == 1:
-                    print('Done: car was outside track or still for more than '
-                          + str(self.max_time_out) + ' seconds')
+            # if self.is_outside_or_still():
+            #     if self.verbose == 1:
+            #         print('Done: car was outside track or still for more than '
+            #               + str(self.max_time_out) + ' seconds')
+            #     done = True
+            if self.num_object_tiles == 0:
                 done = True
+                step_reward = -100
             if self.is_last_tile_visited():
                 if self.verbose == 1:
                     print('Done: last tile visited')
