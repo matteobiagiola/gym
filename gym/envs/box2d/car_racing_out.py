@@ -512,7 +512,7 @@ class CarRacingOut(gym.Env, EzPickle):
             #     done = True
             if self.num_object_tiles == 0:
                 done = True
-                step_reward = -100
+                step_reward -= 100
             if self.is_last_tile_visited():
                 if self.verbose == 1:
                     print('Done: last tile visited')
