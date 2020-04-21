@@ -27,7 +27,7 @@ class ThreeCheckpointsGenerator(CheckpointsGenerator):
     def generate_checkpoints(self, num_checkpoints, np_random: RandomState, track_rad: float) -> List[Checkpoint]:
         assert num_checkpoints == 3
 
-        track_rad = track_rad / 3  # making the track shorter
+        track_rad = track_rad / 2  # making the track shorter
 
         first_curve_direction = 'left'
         if self.randomize_first_curve_direction:

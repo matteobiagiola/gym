@@ -23,6 +23,7 @@ from pyglet import gl
 
 import os
 import pickle
+from enum import Enum
 
 # Easiest continuous control task to learn from pixels, a top-down racing environment.
 # Discrete control is reasonable in this environment as well, on/off discretization is
@@ -75,6 +76,13 @@ BORDER = 8 / SCALE
 BORDER_MIN_COUNT = 4
 
 ROAD_COLOR = [0.4, 0.4, 0.4]
+
+class CarExitStatus(Enum):
+    CAR_IS_ON_GRASS = 0
+    CAR_IS_OUT_OF_PLAYFIELD = 1
+    CAR_VISITED_LAST_TILE = 2
+    CAR_VISITED_ALL_TILES = 3
+    CAR_IS_STILL_TIMEOUT = 4
 
 
 class FrictionDetector(contactListener):
@@ -183,7 +191,7 @@ class CarRacingOut(gym.Env, EzPickle):
         self.num_object_tiles = -1
         self.nsteps = -1
         # Max time out car is allowed to be out of the track or still
-        self.max_time_out = 1.2
+        self.max_time_out = 5.0
         self.fd_tile = fixtureDef(
             shape=polygonShape(vertices=
                                [(0, 0), (1, 0), (1, -1), (0, -1)]))
@@ -472,6 +480,7 @@ class CarRacingOut(gym.Env, EzPickle):
 
         step_reward = 0
         done = False
+        info = {}
         if action is not None:  # First step without action, called from reset()
 
             # car_is_out = True
@@ -501,24 +510,28 @@ class CarRacingOut(gym.Env, EzPickle):
             if self.tile_visited_count == len(self.track):
                 if self.verbose == 1:
                     print('All tiles visited')
-                done = True
-            if abs(x) > PLAYFIELD or abs(y) > PLAYFIELD:
-                done = True
-                step_reward = -100
-            # if self.is_outside_or_still():
-            #     if self.verbose == 1:
-            #         print('Done: car was outside track or still for more than '
-            #               + str(self.max_time_out) + ' seconds')
-            #     done = True
-            if self.num_object_tiles == 0:
-                done = True
-                step_reward -= 100
+                return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_VISITED_ALL_TILES.value}
+
             if self.is_last_tile_visited():
                 if self.verbose == 1:
                     print('Done: last tile visited')
-                done = True
+                return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_VISITED_LAST_TILE.value}
 
-        return self.state, step_reward, done, {}
+            if abs(x) > PLAYFIELD or abs(y) > PLAYFIELD:
+                return self.state, -100, True, {'car_exit_status': CarExitStatus.CAR_IS_OUT_OF_PLAYFIELD.value}
+
+            if self.is_outside_or_still():
+                if self.verbose == 1:
+                    print('Done: car was outside track or still for more than '
+                          + str(self.max_time_out) + ' seconds')
+                return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_STILL_TIMEOUT.value}
+
+            if self.num_object_tiles == 0 and self.id_tile_visited > 3:
+                # print('Car is out. id_tile_visited:', self.id_tile_visited)
+                step_reward -= 100
+                return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_ON_GRASS.value}
+
+        return self.state, step_reward, done, info
 
     def render(self, mode='human'):
         assert mode in ['human', 'state_pixels', 'rgb_array']
@@ -695,7 +708,6 @@ if __name__ == "__main__":
 
     radius = 15.0
     spline = PtSpline(radius)
-    # spline = CatmullRomSpline()
     rad_percentage = 0.5
     chk_generator = ThreeCheckpointsGenerator(randomize_alpha=True, randomize_radius=True,
                                               randomize_first_curve_direction=True,
