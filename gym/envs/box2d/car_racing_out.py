@@ -3,6 +3,8 @@ import numpy as np
 
 import Box2D
 from Box2D.b2 import (edgeShape, circleShape, fixtureDef, polygonShape, revoluteJointDef, contactListener)
+from shapely.geometry import Point
+from shapely.geometry import Polygon
 
 from gym.envs.box2d.road_generator.three_checkpoints_generator import ThreeCheckpointsGenerator
 from gym.envs.box2d.road_generator.spline.catmull_rom_spline import CatmullRomSpline
@@ -24,6 +26,7 @@ from pyglet import gl
 import os
 import pickle
 from enum import Enum
+from collections import deque
 
 # Easiest continuous control task to learn from pixels, a top-down racing environment.
 # Discrete control is reasonable in this environment as well, on/off discretization is
@@ -77,6 +80,7 @@ BORDER_MIN_COUNT = 4
 
 ROAD_COLOR = [0.4, 0.4, 0.4]
 
+
 class CarExitStatus(Enum):
     CAR_IS_ON_GRASS = 0
     CAR_IS_OUT_OF_PLAYFIELD = 1
@@ -118,7 +122,7 @@ class FrictionDetector(contactListener):
             return
         if begin:
             obj.tiles.add(tile)
-            # print tile.road_friction, "ADD", len(obj.tiles)
+            # print(tile.road_friction, "ADD", len(obj.tiles))
             if not tile.road_visited:
                 tile.road_visited = True
                 self.env.reward += 1000.0 / len(self.env.track)
@@ -189,6 +193,7 @@ class CarRacingOut(gym.Env, EzPickle):
         self.tile_vertices = []
         self.id_tile_visited = -1
         self.num_object_tiles = -1
+        self.object_tiles_deque = deque(maxlen=4)
         self.nsteps = -1
         # Max time out car is allowed to be out of the track or still
         self.max_time_out = 5.0
@@ -228,7 +233,12 @@ class CarRacingOut(gym.Env, EzPickle):
         self.id_tile_visited = tile_id
 
     def _register_number_of_object_tiles(self, object_tiles):
+        self.object_tiles_deque.append(len(object_tiles))
         self.num_object_tiles = len(object_tiles)
+
+    # def _is_car_out(self):
+    #     last_two_elements_queue = list(self.object_tiles_deque)[-2:]
+    #     return last_two_elements_queue[0] == 0 and last_two_elements_queue[1] == 0
 
     def update_last_tile_visited(self):
         self.last_tile_visited = True
@@ -400,6 +410,7 @@ class CarRacingOut(gym.Env, EzPickle):
             else:
                 t.is_last_tile = False
             self.road_poly.append(([road1_l, road1_r, road2_r, road2_l], t.color))
+            self.road_poly_with_id.append((Polygon((road1_l, road1_r, road2_r, road2_l)), t.id))
             self.road.append(t)
 
         self.track = track[1:]
@@ -418,8 +429,10 @@ class CarRacingOut(gym.Env, EzPickle):
         self.tile_visited_count = 0
         self.t = 0.0
         self.road_poly = []
+        self.road_poly_with_id = []
         self.id_tile_visited = -1
         self.num_object_tiles = -1
+        self.object_tiles_deque.clear()
         self.nsteps = -1
 
         while True:
@@ -442,6 +455,54 @@ class CarRacingOut(gym.Env, EzPickle):
             return True
         else:
             return False
+
+    def _is_point_inside_tile(self, x1, y1, x2, y2, x, y):
+        if x1 < x < x2 and y1 < y < y2:
+            return True
+        else:
+            return False
+
+    def _get_safe_index_list(self, start_index, _list):
+        assert len(_list) > 0
+        result = start_index
+        exception = True
+        while exception and result > 0:
+            try:
+                _ = _list[start_index]
+                exception = False
+            except IndexError:
+                result -= 1
+        if result < 0:
+            raise IndexError('Not possible to find a valid index for this list:', _list)
+        return result
+
+    # bottom-left and top-right
+    # corners of rectangle.
+    def _is_car_inside(self, x, y, tile_crossed_id):
+        shapely_point = Point(x, y)
+        polygon, tile_id = self.road_poly_with_id[tile_crossed_id - 1]
+        assert tile_id == tile_crossed_id
+        for poly, tile_id in self.road_poly_with_id:
+            if poly.contains(shapely_point):
+                # print('Car is inside. Id of poly:', tile_id, 'Id of tile crossed:', tile_crossed_id)
+                return True
+        # print('Car is outside')
+        return False
+
+        # for poly, color in self.road_poly:
+        # import matplotlib.pyplot as plt
+        # plt.plot(x, y, 'x', color='blue', markersize=20)
+        # plt.plot(poly[0][0], poly[0][1], 'x', color='cyan', markersize=20)  # bottom_right
+        # plt.plot(poly[1][0], poly[1][1], 'x', color='black', markersize=20)  # bottom_left
+        # plt.plot(poly[2][0], poly[2][1], 'x', color='green', markersize=20)  # top_left
+        # plt.plot(poly[3][0], poly[3][1], 'x', color='red', markersize=20)  # top_right
+        # plt.show()
+        # raise ValueError()
+        # shapely_polygon = Polygon((poly[0], poly[1], poly[2], poly[3]))
+        # if shapely_polygon.contains(shapely_point):
+        #     print('Car is inside')
+        #     return True
+        # return False
 
     def step(self, action):
         if action is not None:
@@ -526,10 +587,23 @@ class CarRacingOut(gym.Env, EzPickle):
                           + str(self.max_time_out) + ' seconds')
                 return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_STILL_TIMEOUT.value}
 
-            if self.num_object_tiles == 0 and self.id_tile_visited > 3:
-                # print('Car is out. id_tile_visited:', self.id_tile_visited)
+            if not self._is_car_inside(x, y, self.id_tile_visited):
+                # print('Car is out.')
                 step_reward -= 100
                 return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_ON_GRASS.value}
+
+            # if self.num_object_tiles == 0:
+            #     print('Car is out. id_tile_visited:', self.id_tile_visited)
+
+            # if self.num_object_tiles == 0 and self.id_tile_visited > 3:
+            #     print('Car is out. id_tile_visited:', self.id_tile_visited)
+            #     step_reward -= 100
+            #     return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_ON_GRASS.value}
+
+            # if self._is_car_out() and self.id_tile_visited > 3:
+            #     print('Car is out. id_tile_visited:', self.id_tile_visited)
+            #     step_reward -= 100
+            #     return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_ON_GRASS.value}
 
         return self.state, step_reward, done, info
 
@@ -733,7 +807,13 @@ if __name__ == "__main__":
         while True:
             s, r, done, info = env.step(a)
             total_reward += r
-            if steps % 200 == 0 or done:
+            # if steps % 200 == 0 or done:
+            #     print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
+            #     print("step {} total_reward {:+0.2f}".format(steps, total_reward))
+            #     # import matplotlib.pyplot as plt
+            #     # plt.imshow(s)
+            #     # plt.savefig("test.jpeg")
+            if done:
                 print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
                 print("step {} total_reward {:+0.2f}".format(steps, total_reward))
                 # import matplotlib.pyplot as plt
