@@ -170,7 +170,7 @@ class CarRacingOut(gym.Env, EzPickle):
             assert chk_generator is not None
             self.num_checkpoints = num_checkpoints
             self.road_generator = RoadGenerator(checkpoints_generator=chk_generator, spline=spline)
-            self.spline_resolution = 20
+            self.spline_resolution = 40
             self.track_closed = track_closed
         if import_track and generate_track:
             raise ValueError('Either tracks are imported or generated. Choose one!')
@@ -414,6 +414,7 @@ class CarRacingOut(gym.Env, EzPickle):
             self.road.append(t)
 
         self.track = track[1:]
+        # self.track = track
 
         if self.export_tracks_dir is not None:
             self._export_track(track, 'track')
@@ -783,12 +784,14 @@ if __name__ == "__main__":
     radius = 15.0
     spline = PtSpline(radius)
     rad_percentage = 0.5
-    chk_generator = ThreeCheckpointsGenerator(randomize_alpha=True, randomize_radius=True,
+    # chk_generator = ThreeCheckpointsGenerator(randomize_alpha=True, randomize_radius=True,
+    #                                           randomize_first_curve_direction=True,
+    #                                           track_rad_percentage=rad_percentage)
+    chk_generator = CircularCheckpointsGenerator(randomize_alpha=False, randomize_radius=True,
                                               randomize_first_curve_direction=True,
                                               track_rad_percentage=rad_percentage)
     env = CarRacingOut(verbose=0, generate_track=True, spline=spline,
-                       chk_generator=chk_generator, num_checkpoints=3, track_closed=False)
-
+                       chk_generator=chk_generator, num_checkpoints=12, track_closed=True)
     # env = CarRacingOut()
     env.render()
     env.viewer.window.on_key_press = key_press
@@ -816,6 +819,7 @@ if __name__ == "__main__":
             if done:
                 print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
                 print("step {} total_reward {:+0.2f}".format(steps, total_reward))
+                print('info:', info)
                 # import matplotlib.pyplot as plt
                 # plt.imshow(s)
                 # plt.savefig("test.jpeg")
