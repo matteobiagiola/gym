@@ -14,6 +14,7 @@ from gym.envs.box2d.road_generator.spline.pt_spline import PtSpline
 from gym.envs.box2d.road_generator.road_generator import RoadGenerator
 from gym.envs.box2d.road_generator.checkpoints_generator import CheckpointsGenerator
 from gym.envs.box2d.road_generator.spline.spline import Spline
+from gym.envs.box2d.road_generator.checkpoint import Checkpoint
 
 import gym
 from gym import spaces
@@ -27,6 +28,10 @@ import os
 import pickle
 from enum import Enum
 from collections import deque
+import matplotlib.pyplot as plt
+import random
+import cv2
+from gym.envs.box2d.vae import ConvVAE
 
 # Easiest continuous control task to learn from pixels, a top-down racing environment.
 # Discrete control is reasonable in this environment as well, on/off discretization is
@@ -55,8 +60,10 @@ from collections import deque
 #
 # Created by Oleg Klimov. Licensed on the same terms as the rest of OpenAI Gym.
 
-STATE_W = 96  # less than Atari 160x192
-STATE_H = 96
+# STATE_W = 96  # less than Atari 160x192
+# STATE_H = 96
+STATE_W = 64
+STATE_H = 64
 VIDEO_W = 600
 VIDEO_H = 400
 WINDOW_W = 1000
@@ -64,19 +71,48 @@ WINDOW_H = 800
 
 SCALE = 6.0  # Track scale
 TRACK_RAD = 900 / SCALE  # Track is heavily morphed circle with this radius
+# TRACK_RAD = 450 / SCALE  # Track is heavily morphed circle with this radius
 PLAYFIELD = 2000 / SCALE  # Game over boundary
+# FPS = 60  # Frames per second
 FPS = 50  # Frames per second
 ZOOM = 2.7  # Camera zoom
 # ZOOM        = 0.3        # Camera zoom
-ZOOM_FOLLOW = True  # Set to False for fixed view (don't use zoom)
+ZOOM_FOLLOW = False  # Set to False for fixed view (don't use zoom)
 ZOOM_FINAL = 16  # Camera zoom final value (after animation) if ZOOM_FOLLOW = False
+# ZOOM_FINAL = 4  # Camera zoom final value (after animation) if ZOOM_FOLLOW = False
 
 TRACK_DETAIL_STEP = 21 / SCALE
 TRACK_TURN_RATE = 0.31
-# TRACK_WIDTH = 40 / SCALE
-TRACK_WIDTH = 70 / SCALE
+TRACK_WIDTH = 40 / SCALE
+# TRACK_WIDTH = 70 / SCALE
 BORDER = 8 / SCALE
 BORDER_MIN_COUNT = 4
+
+# very smooth control: 10% -> 0.2 diff in steering allowed (requires more training)
+# smooth control: 15% -> 0.3 diff in steering allowed
+# MAX_STEERING_DIFF = 0.15
+MAX_STEERING_DIFF = 0.10
+# Negative reward for getting off the road
+REWARD_CRASH = -10
+
+MIN_THROTTLE = 0.0
+MAX_THROTTLE = 0.3
+# MAX_THROTTLE = 1
+
+MIN_BRAKE = 0.0
+MAX_BRAKE = 0.3
+# MAX_BRAKE = 1
+
+Z_SIZE = 32
+
+# Local path
+# VAE_PATH = "/Users/matteobiagiola/workspace/my-gym/gym/envs/box2D/vae.json"
+# Google colab path
+# VAE_PATH = "/content/drive/My Drive/my-gym/gym/envs/box2d/vae.json"
+
+# Symmetric command
+MAX_STEERING = 1
+MIN_STEERING = -MAX_STEERING
 
 ROAD_COLOR = [0.4, 0.4, 0.4]
 
@@ -148,7 +184,9 @@ class CarRacingOut(gym.Env, EzPickle):
 
     def __init__(self, verbose=1, import_track: bool = False, dir_with_tracks=None, export_tracks_dir=None,
                  generate_track: bool = False, num_checkpoints: int = 0, spline: Spline = None,
-                 chk_generator: CheckpointsGenerator = None, track_closed: bool = True):
+                 chk_generator: CheckpointsGenerator = None, track_closed: bool = True, n_command_history: int = 60, 
+                 is_vae: bool = False, n_stack: int = 4, discrete_actions: bool = False, num_timesteps_car_allowed_out: int = 15,
+                 vae_path: str = None, fixed_track: bool = False, evaluate: bool = False):
         EzPickle.__init__(self)
         self.seed()
 
@@ -170,7 +208,7 @@ class CarRacingOut(gym.Env, EzPickle):
             assert chk_generator is not None
             self.num_checkpoints = num_checkpoints
             self.road_generator = RoadGenerator(checkpoints_generator=chk_generator, spline=spline)
-            self.spline_resolution = 40
+            self.spline_resolution = 50
             self.track_closed = track_closed
         if import_track and generate_track:
             raise ValueError('Either tracks are imported or generated. Choose one!')
@@ -182,6 +220,8 @@ class CarRacingOut(gym.Env, EzPickle):
         self.contactListener_keepref = FrictionDetector(self)
         self.world = Box2D.b2World((0, 0), contactListener=self.contactListener_keepref)
         self.viewer = None
+        self.fixed_track = fixed_track
+        self.evaluate = evaluate
         self.invisible_state_window = None
         self.invisible_video_window = None
         self.road = None
@@ -195,19 +235,88 @@ class CarRacingOut(gym.Env, EzPickle):
         self.num_object_tiles = -1
         self.object_tiles_deque = deque(maxlen=4)
         self.nsteps = -1
+        self.previous_steering = None
+        self.discrete_actions = discrete_actions
         # Max time out car is allowed to be out of the track or still
-        self.max_time_out = 5.0
+        self.max_time_out = 1.2
+        # self.max_time_out = 4
+        self.const_num_timesteps_car_allowed_out = num_timesteps_car_allowed_out
+
+        self.reset_num_timesteps_car_allowed_out()
+        self.steer_actions = []
+        self.gas_actions = []
+        self.brake_actions = []
+
+        # # Save last n commands (steering + gas + brake)
+        self.n_commands = 3
+        # Save last n commands (steering)
+        # self.n_commands = 1
+        # Custom frame-stack
+        self.n_stack = n_stack
+
+        self.command_history = np.zeros((1, self.n_commands * n_command_history))
+        self.n_command_history = n_command_history
+        self.is_vae = is_vae
+
+        if self.is_vae:
+            self.vae = ConvVAE(z_size=Z_SIZE, batch_size=1, is_training=False, reuse=False, gpu_mode=False)
+            self.vae.load_json(vae_path)
+
         self.fd_tile = fixtureDef(
             shape=polygonShape(vertices=
                                [(0, 0), (1, 0), (1, -1), (0, -1)]))
-        self.action_space = spaces.Box(np.array([-1, 0, 0]), np.array([+1, +1, +1]),
-                                       dtype=np.float32)  # steer, gas, brake
-        self.observation_space = spaces.Box(low=0, high=255, shape=(STATE_H, STATE_W, 3), dtype=np.uint8)
+        # self.action_space = spaces.Box(np.array([-1, 0, 0]), np.array([+1, +1, +1]),
+        #                                dtype=np.float32)  # steer, gas, brake
+        # self.action_space = spaces.Box(np.array([MIN_STEERING]), np.array([MAX_STEERING]), dtype=np.float32)
+        # self.action_space = spaces.Box(np.array([-1, 0, 0]), np.array([+1, +1, +0.5]),
+        #                                dtype=np.float32)  # steer, gas, brake
+        # self.action_space = spaces.Box(np.array([-1, 0, 0]), np.array([+1, +0.5, +0.2]),
+        #                                dtype=np.float32)  # steer, gas
+        # self.action_space = spaces.Box(np.array([-1, -1]), np.array([+1, +1]),
+        #                                dtype=np.float32)  # steer, brake/gas
+        # self.observation_space = spaces.Box(low=0, high=255, shape=(STATE_H, STATE_W, 3), dtype=np.uint8)
+        if self.is_vae:
+            self.action_space = spaces.Box(np.array([-1, -1, -1]), np.array([+1, +1, +1]),
+                                           dtype=np.float32)  # steer, gas, brake
+
+            if n_stack > 1:
+                self.observation_space = spaces.Box(low=np.finfo(np.float32).min, high=np.finfo(np.float32).max, 
+                    shape=(Z_SIZE + self.n_commands * n_command_history,), dtype=np.float32)
+            else:
+                self.observation_space = spaces.Box(low=np.finfo(np.float32).min, high=np.finfo(np.float32).max, 
+                    shape=(1, Z_SIZE + self.n_commands * n_command_history), dtype=np.float32)
+            if not self.discrete_actions:
+                self.action_space = spaces.Box(np.array([-1, -1, -1]), np.array([+1, +1, +1]),
+                                           dtype=np.float32)  # steer, gas, brake
+            else:
+                self.action_space = spaces.Box(np.array([-1, 0, 0]), np.array([+1, +1, +1]),
+                                                           dtype=np.float32)  # steer, gas, brake
+        else:
+            self.action_space = spaces.Box(np.array([-1, 0, 0]), np.array([+1, +1, +1]),
+                                           dtype=np.float32)  # steer, gas, brake
+            self.observation_space = spaces.Box(low=0, high=255, shape=(STATE_H, STATE_W, 3), dtype=np.uint8)
+            # self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.getGroundTruthDim(),), dtype=np.float32)
+
+        if n_stack > 1:
+            obs_space = self.observation_space
+            low = np.repeat(obs_space.low, self.n_stack, axis=-1)
+            high = np.repeat(obs_space.high, self.n_stack, axis=-1)
+            self.stacked_obs = np.zeros(low.shape, low.dtype)
+            self.observation_space = spaces.Box(low=low, high=high, dtype=obs_space.dtype)
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
-        # self.created_seed = seed
+        self.created_seed = seed
         return [seed]
+
+    @staticmethod
+    def getGroundTruthDim():
+        return 5
+
+    def getGroundTruth(self):
+        return np.array([self.car.hull.position[0], self.car.hull.position[1], 
+            self.car.hull.linearVelocity[0], self.car.hull.linearVelocity[1], 
+            self.car.hull.angularVelocity])
 
     def _destroy(self):
         if not self.road:
@@ -236,10 +345,6 @@ class CarRacingOut(gym.Env, EzPickle):
         self.object_tiles_deque.append(len(object_tiles))
         self.num_object_tiles = len(object_tiles)
 
-    # def _is_car_out(self):
-    #     last_two_elements_queue = list(self.object_tiles_deque)[-2:]
-    #     return last_two_elements_queue[0] == 0 and last_two_elements_queue[1] == 0
-
     def update_last_tile_visited(self):
         self.last_tile_visited = True
 
@@ -267,32 +372,42 @@ class CarRacingOut(gym.Env, EzPickle):
     def _create_track(self):
 
         track = []
+        self.alphas = []
+        self.rads = []
+        self.checkpoints = []
         self.road = []
 
         if self.import_track:
             track = self._import_track()
         elif self.generate_track:
             # print('np_random:', self.np_random.get_state()[2])
-            track = self.road_generator \
+            track, checkpoints, self.alphas, self.rads = self.road_generator \
                 .generate_road(self.num_checkpoints, self.spline_resolution, self.np_random,
                                TRACK_RAD, looped=self.track_closed)
+            self.checkpoints = [checkpoint.point for checkpoint in checkpoints]
         else:
             # original code
             CHECKPOINTS = 12
             # Create checkpoints
             checkpoints = []
             for c in range(CHECKPOINTS):
+                alpha_random_part = self.np_random.uniform(0, 2 * math.pi * 1 / CHECKPOINTS)
                 alpha = 2 * math.pi * c / CHECKPOINTS + self.np_random.uniform(0, 2 * math.pi * 1 / CHECKPOINTS)
                 rad = self.np_random.uniform(TRACK_RAD / 3, TRACK_RAD)
                 if c == 0:
                     alpha = 0
+                    alpha_random_part = 0.0
                     rad = 1.5 * TRACK_RAD
                 if c == CHECKPOINTS - 1:
                     alpha = 2 * math.pi * c / CHECKPOINTS
+                    alpha_random_part = 0.0
                     self.start_alpha = 2 * math.pi * (-0.5) / CHECKPOINTS
                     rad = 1.5 * TRACK_RAD
                 checkpoints.append((alpha, rad * math.cos(alpha), rad * math.sin(alpha)))
+                self.alphas.append(alpha_random_part)
+                self.rads.append(rad)
 
+            self.checkpoints = checkpoints
             # print('Checkpoints: ', checkpoints)
             # print "\n".join(str(h) for h in checkpoints)
             # self.road_poly = [ (    # uncomment this to see checkpoints
@@ -387,31 +502,35 @@ class CarRacingOut(gym.Env, EzPickle):
             if well_glued_together > TRACK_DETAIL_STEP:
                 return False
 
-        for i in range(1, len(track)):
-            alpha1, beta1, x1, y1 = track[i]
-            alpha2, beta2, x2, y2 = track[i - 1]
-            road1_l = (x1 - TRACK_WIDTH * math.cos(beta1), y1 - TRACK_WIDTH * math.sin(beta1))
-            road1_r = (x1 + TRACK_WIDTH * math.cos(beta1), y1 + TRACK_WIDTH * math.sin(beta1))
-            road2_l = (x2 - TRACK_WIDTH * math.cos(beta2), y2 - TRACK_WIDTH * math.sin(beta2))
-            road2_r = (x2 + TRACK_WIDTH * math.cos(beta2), y2 + TRACK_WIDTH * math.sin(beta2))
+        try:
+            for i in range(1, len(track)):
+                alpha1, beta1, x1, y1 = track[i]
+                alpha2, beta2, x2, y2 = track[i - 1]
+                road1_l = (x1 - TRACK_WIDTH * math.cos(beta1), y1 - TRACK_WIDTH * math.sin(beta1))
+                road1_r = (x1 + TRACK_WIDTH * math.cos(beta1), y1 + TRACK_WIDTH * math.sin(beta1))
+                road2_l = (x2 - TRACK_WIDTH * math.cos(beta2), y2 - TRACK_WIDTH * math.sin(beta2))
+                road2_r = (x2 + TRACK_WIDTH * math.cos(beta2), y2 + TRACK_WIDTH * math.sin(beta2))
 
-            t = self.world.CreateStaticBody(fixtures=fixtureDef(
-                shape=polygonShape(vertices=[road1_l, road1_r, road2_r, road2_l])
-            ))
-            t.userData = t
-            c = 0.01 * (i % 3)
-            t.color = [ROAD_COLOR[0] + c, ROAD_COLOR[1] + c, ROAD_COLOR[2] + c]
-            t.road_visited = False
-            t.road_friction = 1.0
-            t.fixtures[0].sensor = True
-            t.id = i
-            if i == len(track) - 1:
-                t.is_last_tile = True
-            else:
-                t.is_last_tile = False
-            self.road_poly.append(([road1_l, road1_r, road2_r, road2_l], t.color))
-            self.road_poly_with_id.append((Polygon((road1_l, road1_r, road2_r, road2_l)), t.id))
-            self.road.append(t)
+                t = self.world.CreateStaticBody(fixtures=fixtureDef(
+                    shape=polygonShape(vertices=[road1_l, road1_r, road2_r, road2_l])
+                ))
+                t.userData = t
+                c = 0.01 * (i % 3)
+                t.color = [ROAD_COLOR[0] + c, ROAD_COLOR[1] + c, ROAD_COLOR[2] + c]
+                t.road_visited = False
+                t.road_friction = 1.0
+                t.fixtures[0].sensor = True
+                t.id = i
+                if i == len(track) - 1:
+                    t.is_last_tile = True
+                else:
+                    t.is_last_tile = False
+                self.road_poly.append(([road1_l, road1_r, road2_r, road2_l], t.color))
+                self.road_poly_with_id.append((Polygon((road1_l, road1_r, road2_r, road2_l)), t.id))
+                self.road.append(t)
+        except AssertionError as e:
+            print('AssertionError: trying to re-generate track...')
+            return False
 
         self.track = track[1:]
         # self.track = track
@@ -420,6 +539,9 @@ class CarRacingOut(gym.Env, EzPickle):
             self._export_track(track, 'track')
 
         return True
+
+    def reset_num_timesteps_car_allowed_out(self):
+        self.num_timesteps_car_allowed_out = self.const_num_timesteps_car_allowed_out
 
     def reset(self):
         self._destroy()
@@ -435,6 +557,12 @@ class CarRacingOut(gym.Env, EzPickle):
         self.num_object_tiles = -1
         self.object_tiles_deque.clear()
         self.nsteps = -1
+        self.steer_actions = []
+        self.gas_actions = []
+        self.brake_actions = []
+        self.previous_steering = None
+        self.reset_num_timesteps_car_allowed_out()
+        self.command_history = np.zeros((1, self.n_commands * self.n_command_history))
 
         while True:
             success = self._create_track()
@@ -444,24 +572,10 @@ class CarRacingOut(gym.Env, EzPickle):
                 print("retry to generate track (normal if there are not many of this messages)")
         self.car = Car(self.world, *self.track[0][1:4])
 
-        # self.seed(self.created_seed)
+        if self.fixed_track:
+            self.seed(self.created_seed)
 
         return self.step(None)[0]
-
-    # does not work yet
-    def _is_inside_tile(self, p, q, r):
-        # p(x,y) = point to be checked; q(x1, y1) = bottom-left corner point; 
-        # r(x2, y2) = top-right corner point
-        if p[0] > q[0] and p[0] < r[0] and p[1] > q[1] and p[1] < r[1]:
-            return True
-        else:
-            return False
-
-    def _is_point_inside_tile(self, x1, y1, x2, y2, x, y):
-        if x1 < x < x2 and y1 < y < y2:
-            return True
-        else:
-            return False
 
     def _get_safe_index_list(self, start_index, _list):
         assert len(_list) > 0
@@ -477,18 +591,24 @@ class CarRacingOut(gym.Env, EzPickle):
             raise IndexError('Not possible to find a valid index for this list:', _list)
         return result
 
-    # bottom-left and top-right
-    # corners of rectangle.
     def _is_car_inside(self, x, y, tile_crossed_id):
-        shapely_point = Point(x, y)
-        polygon, tile_id = self.road_poly_with_id[tile_crossed_id - 1]
-        assert tile_id == tile_crossed_id
-        for poly, tile_id in self.road_poly_with_id:
-            if poly.contains(shapely_point):
-                # print('Car is inside. Id of poly:', tile_id, 'Id of tile crossed:', tile_crossed_id)
+        # print("Last contact with track", self.t - self.last_touch_with_track)
+        if self.t - self.last_touch_with_track > 0.2:
+            shapely_point = Point(x, y)
+            # polygon, tile_id = self.road_poly_with_id[tile_crossed_id - 1]
+            # assert tile_id == tile_crossed_id
+            for poly, tile_id in self.road_poly_with_id:
+                if poly.contains(shapely_point):
+                    self.reset_num_timesteps_car_allowed_out()
+                    return True
+            if self.num_timesteps_car_allowed_out < 0:
+                return False
+            else:
+                self.num_timesteps_car_allowed_out -= 1
+                # print("Num timesteps car allowed out", self.num_timesteps_car_allowed_out)
                 return True
-        # print('Car is outside')
-        return False
+        self.reset_num_timesteps_car_allowed_out()
+        return True
 
         # for poly, color in self.road_poly:
         # import matplotlib.pyplot as plt
@@ -505,63 +625,72 @@ class CarRacingOut(gym.Env, EzPickle):
         #     return True
         # return False
 
-    def step(self, action):
+    def remap_to_new_range(self, old_value, old_min, old_max, new_min, new_max):
+        return ( (old_value - old_min) / (old_max - old_min) ) * (new_max - new_min) + new_min
+
+    def original_step(self, action):
         if action is not None:
-            self.car.steer(-action[0])
-            self.car.gas(action[1])
-            self.car.brake(action[2])
+            # Clip steering angle rate to enforce continuity
+            if self.n_command_history > 0 and not self.discrete_actions:
+                prev_steering = self.command_history[0, -3]
+                max_diff = (MAX_STEERING_DIFF - 1e-5) * (MAX_STEERING - MIN_STEERING)
+                diff = np.clip(action[0] - prev_steering, -max_diff, max_diff)
+                action_0 = prev_steering + diff
+                # action_0 = action[0]
+            else:
+                action_0 = action[0]
+
+            self.car.steer(-action_0)
+            self.steer_actions.append(action_0)
+            # self.car.steer(-action_0)
+            # self.steer_actions.append(action_0)
+            if self.is_vae and not self.discrete_actions: 
+                self.car.gas(self.remap_to_new_range(action[1], -1, 1, MIN_THROTTLE, MAX_THROTTLE))
+                self.gas_actions.append(self.remap_to_new_range(action[1], -1, 1, MIN_THROTTLE, MAX_THROTTLE))
+                self.car.brake(self.remap_to_new_range(action[2], -1, 1, MIN_BRAKE, MAX_BRAKE))
+                self.brake_actions.append(self.remap_to_new_range(action[2], -1, 1, MIN_BRAKE, MAX_BRAKE))
+            else:
+                self.car.gas(action[1])
+                self.gas_actions.append(action[1])
+                self.car.brake(action[2])
+                self.brake_actions.append(action[2])
 
         self.car.step(1.0 / FPS)
         self.world.Step(1.0 / FPS, 6 * 30, 2 * 30)
         self.t += 1.0 / FPS
         self.nsteps += 1
 
+        # self.state = self.getGroundTruth()
         self.state = self.render("state_pixels")
+        if self.is_vae:
+            # cv2.imwrite("{}.jpg".format('/Users/matteobiagiola/Desktop/record_original/frame_' + str(self.nsteps)), self.state)
+            self.state = self.state.astype(np.float32)/255.0
+            self.state = self.state.reshape(1, STATE_W, STATE_H, 3)
+            self.state = self.vae.encode(self.state)
+            # reconstructed_observation = self.vae.decode(self.state)
+            # reconstructed_observation = reconstructed_observation * 255.0
+            # reconstructed_observation = reconstructed_observation.astype(np.uint8)
+            # cv2.imwrite("{}.jpg".format('/Users/matteobiagiola/Desktop/record_reconstructed/frame_' + str(self.nsteps)), reconstructed_observation[0])
+
+        # Update command history
+        if self.is_vae and self.n_command_history > 0 and action is not None:
+            self.command_history = np.roll(self.command_history, shift=-self.n_commands, axis=-1)
+            if not self.discrete_actions:
+                self.command_history[..., -self.n_commands:] = [action_0, self.remap_to_new_range(action[1], -1, 1, MIN_THROTTLE, MAX_THROTTLE), self.remap_to_new_range(action[2], -1, 1, MIN_BRAKE, MAX_BRAKE)]
+            else:
+                self.command_history[..., -self.n_commands:] = [action_0, action[1], action[2]]
+            self.state = np.concatenate((self.state, self.command_history), axis=-1)
+        elif self.is_vae and self.n_command_history > 0 and action is None:
+            self.state = np.concatenate((self.state, self.command_history), axis=-1)
 
         x, y = self.car.hull.position
 
         car_position = (x, y)
 
-        # filename = 'tile_position_' + str(self.id_tile_visited) + '_' + str(self.id_tile_visited + 1) + '.png'
-        # figure = plt.figure()
-        # plt.plot(top_left_corner_point[0], top_left_corner_point[1], 'o', color="blue")
-        # plt.plot(top_right_corner_point[0], top_right_corner_point[1], 'o', color="orange")
-        # plt.plot(bottom_right_corner_point[0], bottom_right_corner_point[1], 'o', color="black")
-        # plt.plot(bottom_left_corner_point[0], bottom_left_corner_point[1], 'o', color="green")
-        # plt.plot(x, y, 'o', color="red")
-        # if os.path.exists(filename):
-        #     i = 0
-        #     filename = 'tile_position_' + str(self.id_tile_visited) + '_' \
-        #         + str(self.id_tile_visited + 1) + '_' + str(i) + '.png'
-        #     while os.path.exists(filename):
-        #         i += 1
-        #         filename = 'tile_position_' + str(self.id_tile_visited) + '_' \
-        #             + str(self.id_tile_visited + 1) + '_' + str(i) + '.png'
-        # plt.savefig(filename)
-        # plt.close(figure)
-
         step_reward = 0
         done = False
         info = {}
         if action is not None:  # First step without action, called from reset()
-
-            # car_is_out = True
-            # tile_for_which_car_is_in = -1
-            # for i in range(len(self.tile_vertices)):
-            #     tile_vertex = self.tile_vertices[i]
-            #     top_left_corner_point = tile_vertex[0]
-            #     top_right_corner_point = tile_vertex[1]
-            #     bottom_right_corner_point = tile_vertex[2]
-            #     bottom_left_corner_point = tile_vertex[3]
-            #     if self._is_inside_tile(car_position, bottom_left_corner_point, top_right_corner_point):
-            #         tile_for_which_car_is_in = i
-            #         car_is_out = False
-            #         break
-            # if not car_is_out:
-            #     print('Car is in:', car_position, 'in tile with id:', tile_for_which_car_is_in, 
-            #             'current_tile:', self.id_tile_visited)
-            # else:
-            #     print('Car is out:', car_position, 'current_tile:', self.id_tile_visited)
 
             self.reward -= 0.1
             # We actually don't want to count fuel spent, we want car to be faster.
@@ -569,44 +698,76 @@ class CarRacingOut(gym.Env, EzPickle):
             self.car.fuel_spent = 0.0
             step_reward = self.reward - self.prev_reward
             self.prev_reward = self.reward
+
+            average_action = [np.array(self.steer_actions).mean(), np.array(self.gas_actions).mean(), np.array(self.brake_actions).mean()]
+            min_action = [np.array(self.steer_actions).min(), np.array(self.gas_actions).min(), np.array(self.brake_actions).min()]
+            max_action = [np.array(self.steer_actions).max(), np.array(self.gas_actions).max(), np.array(self.brake_actions).max()]
+            max_action = [np.array(self.steer_actions).max(), np.array(self.gas_actions).max(), np.array(self.brake_actions).max()]
+            std_action = [np.array(self.steer_actions).std(), np.array(self.gas_actions).std(), np.array(self.brake_actions).std()]
+
+            other_info = {
+                'per_visited_tiles': self.tile_visited_count/len(self.track), 
+                'average_action': average_action,
+                'min_action': min_action,
+                'max_action': max_action,
+                'std_action': std_action,
+                'alphas': self.alphas,
+                'rads': self.rads
+            }
+
             if self.tile_visited_count == len(self.track):
                 if self.verbose == 1:
                     print('All tiles visited')
-                return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_VISITED_ALL_TILES.value}
+                done = True
+                info = {'car_exit_status': CarExitStatus.CAR_VISITED_ALL_TILES.value, **other_info}
 
             if self.is_last_tile_visited():
                 if self.verbose == 1:
                     print('Done: last tile visited')
-                return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_VISITED_LAST_TILE.value}
+                done = True
+                info = {'car_exit_status': CarExitStatus.CAR_VISITED_LAST_TILE.value, **other_info}
 
             if abs(x) > PLAYFIELD or abs(y) > PLAYFIELD:
-                return self.state, -100, True, {'car_exit_status': CarExitStatus.CAR_IS_OUT_OF_PLAYFIELD.value}
+                if self.verbose == 1:
+                    print('Car is out of playfield.')
+                done = True
+                step_reward = -100
+                info = {'car_exit_status': CarExitStatus.CAR_IS_OUT_OF_PLAYFIELD.value, **other_info}
 
             if self.is_outside_or_still():
                 if self.verbose == 1:
                     print('Done: car was outside track or still for more than '
                           + str(self.max_time_out) + ' seconds')
-                return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_STILL_TIMEOUT.value}
+                done = True
+                info = {'car_exit_status': CarExitStatus.CAR_IS_STILL_TIMEOUT.value, **other_info}
 
             if not self._is_car_inside(x, y, self.id_tile_visited):
-                # print('Car is out.')
-                step_reward -= 100
-                return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_ON_GRASS.value}
+                if self.verbose == 1:
+                    print('Car is out.')
+                done = True
+                step_reward -= REWARD_CRASH
+                info = {'car_exit_status': CarExitStatus.CAR_IS_ON_GRASS.value, **other_info}
 
-            # if self.num_object_tiles == 0:
-            #     print('Car is out. id_tile_visited:', self.id_tile_visited)
+        if self.n_stack > 1:
+            self.stacked_obs = np.roll(self.stacked_obs, shift=-self.state.shape[-1], axis=-1)
+            if done:
+                self.stacked_obs[...] = 0
+            self.stacked_obs[..., -self.state.shape[-1]:] = self.state
+            self.state = self.stacked_obs
 
-            # if self.num_object_tiles == 0 and self.id_tile_visited > 3:
-            #     print('Car is out. id_tile_visited:', self.id_tile_visited)
-            #     step_reward -= 100
-            #     return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_ON_GRASS.value}
-
-            # if self._is_car_out() and self.id_tile_visited > 3:
-            #     print('Car is out. id_tile_visited:', self.id_tile_visited)
-            #     step_reward -= 100
-            #     return self.state, step_reward, True, {'car_exit_status': CarExitStatus.CAR_IS_ON_GRASS.value}
+        if self.evaluate and done == True:
+            print('info:', info)
 
         return self.state, step_reward, done, info
+
+    def step(self, action):
+        return self.original_step(action)
+        # if action is None:
+        #     return self.original_step(action)
+        # else:
+        #     for _ in range(3):
+        #         state, step_reward, done, info = self.original_step(action)
+        #     return state, step_reward, done, info
 
     def render(self, mode='human'):
         assert mode in ['human', 'state_pixels', 'rgb_array']
@@ -666,7 +827,7 @@ class CarRacingOut(gym.Env, EzPickle):
             geom.render()
         self.viewer.onetime_geoms = []
         t.disable()
-        self.render_indicators(WINDOW_W, WINDOW_H)
+        # self.render_indicators(WINDOW_W, WINDOW_H)
 
         if mode == 'human':
             win.flip()
@@ -746,21 +907,8 @@ if __name__ == "__main__":
     from pyglet.window import key
 
     a = np.array([0.0, 0.0, 0.0])
+    # a = np.array([0.0])
 
-
-    # def key_press(k, mod):
-    #     global restart
-    #     if k == 0xff0d: restart = True
-    #     if k == key.LEFT:  a[0] = -1.0
-    #     if k == key.RIGHT: a[0] = +1.0
-    #     if k == key.UP:    a[1] = +1.0
-    #     if k == key.DOWN:  a[2] = +0.8  # set 1.0 for wheels to block to zero rotation
-
-    # def key_release(k, mod):
-    #     if k == key.LEFT and a[0] == -1.0: a[0] = 0
-    #     if k == key.RIGHT and a[0] == +1.0: a[0] = 0
-    #     if k == key.UP:    a[1] = 0
-    #     if k == key.DOWN:  a[2] = 0
 
     def key_press(k, mod):
         global restart
@@ -770,12 +918,26 @@ if __name__ == "__main__":
         if k == key.UP:    a[1] = +0.7
         if k == key.DOWN:  a[2] = +0.7  # set 1.0 for wheels to block to zero rotation
 
-
     def key_release(k, mod):
         if k == key.LEFT and a[0] == -0.7: a[0] = 0
         if k == key.RIGHT and a[0] == +0.7: a[0] = 0
         if k == key.UP:    a[1] = 0
         if k == key.DOWN:  a[2] = 0
+
+    # def key_press(k, mod):
+    #     global restart
+    #     if k == 0xff0d: restart = True
+    #     if k == key.LEFT:  a[0] = -0.7
+    #     if k == key.RIGHT: a[0] = +0.7
+    #     if k == key.UP:    a[1] = +0.7
+    #     if k == key.DOWN:  a[2] = +0.7  # set 1.0 for wheels to block to zero rotation
+
+
+    # def key_release(k, mod):
+    #     if k == key.LEFT and a[0] == -0.7: a[0] = 0
+    #     if k == key.RIGHT and a[0] == +0.7: a[0] = 0
+    #     if k == key.UP:    a[1] = 0
+    #     if k == key.DOWN:  a[2] = 0
 
 
     # dir_with_tracks = '/Users/matteobiagiola/workspace/carracing/road-generator/tracks_simple_pt_splines'
@@ -783,15 +945,23 @@ if __name__ == "__main__":
 
     radius = 15.0
     spline = PtSpline(radius)
+    # spline = CatmullRomSpline()
     rad_percentage = 0.5
+    alpha_percentage = 0.5
     # chk_generator = ThreeCheckpointsGenerator(randomize_alpha=True, randomize_radius=True,
     #                                           randomize_first_curve_direction=True,
-    #                                           track_rad_percentage=rad_percentage)
-    chk_generator = CircularCheckpointsGenerator(randomize_alpha=False, randomize_radius=True,
+    #                                           track_rad_percentage=rad_percentage,
+    #                                           alpha_percentage=alpha_percentage)
+    chk_generator = CircularCheckpointsGenerator(randomize_alpha=True, randomize_radius=True,
                                               randomize_first_curve_direction=True,
-                                              track_rad_percentage=rad_percentage)
+                                              track_rad_percentage=rad_percentage,
+                                              alpha_percentage=alpha_percentage)
     env = CarRacingOut(verbose=0, generate_track=True, spline=spline,
-                       chk_generator=chk_generator, num_checkpoints=12, track_closed=True)
+                       chk_generator=chk_generator, num_checkpoints=8, track_closed=False, is_vae=True, 
+                       n_command_history=60, n_stack=4, discrete_actions=True, 
+                       num_timesteps_car_allowed_out=60,
+                       vae_path="/Users/matteobiagiola/workspace/my-gym/gym/envs/box2D/vae.json", fixed_track=False)
+
     # env = CarRacingOut()
     env.render()
     env.viewer.window.on_key_press = key_press
@@ -802,14 +972,19 @@ if __name__ == "__main__":
 
         env = Monitor(env, '/tmp/video-test', force=True)
     isopen = True
+    # DIR_NAME = '/Users/matteobiagiola/Desktop/record'
     while isopen:
         env.reset()
         total_reward = 0.0
         steps = 0
         restart = False
+        # recording_obs = []
+        # random_generated_int = random.randint(0, 2**31-1)
+        # filename = DIR_NAME + "/" + str(random_generated_int) + ".npz"
         while True:
             s, r, done, info = env.step(a)
             total_reward += r
+            # recording_obs.append(s)
             # if steps % 200 == 0 or done:
             #     print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
             #     print("step {} total_reward {:+0.2f}".format(steps, total_reward))
@@ -820,6 +995,8 @@ if __name__ == "__main__":
                 print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
                 print("step {} total_reward {:+0.2f}".format(steps, total_reward))
                 print('info:', info)
+                # recording_obs = np.array(recording_obs, dtype=np.uint8)
+                # np.savez_compressed(filename, obs=recording_obs)
                 # import matplotlib.pyplot as plt
                 # plt.imshow(s)
                 # plt.savefig("test.jpeg")

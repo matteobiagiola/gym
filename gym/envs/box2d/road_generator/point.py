@@ -11,7 +11,7 @@ class Point:
         return self.x, self.y
 
     def __repr__(self):
-        return str(self.x) + ', ' + str(self.y)
+        return '(' + str(self.x) + ', ' + str(self.y) + ')'
 
     def __eq__(self, other):
         if isinstance(other, Point):

@@ -107,6 +107,7 @@ class FrictionDetector(contactListener):
                 self.env.update_last_tile_visited() 
             # print tile.road_friction, "DEL", len(obj.tiles) -- should delete to zero when on grass (this works)
 
+
 class NewCarRacing(gym.Env, EzPickle):
     metadata = {
         'render.modes': ['human', 'rgb_array', 'state_pixels'],

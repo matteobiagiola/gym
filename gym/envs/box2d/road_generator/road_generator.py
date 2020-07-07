@@ -1,6 +1,6 @@
 import math
 import copy
-from typing import List
+from typing import List, Tuple
 
 from gym.envs.box2d.road_generator.checkpoint import Checkpoint
 
@@ -107,8 +107,9 @@ class RoadGenerator:
         return track_beta_adjusted
 
     def generate_road(self, num_checkpoints: int, resolution: int, np_random: RandomState,
-                      track_rad: float, looped=False) -> List:
-        checkpoints = self.checkpoints_generator.generate_checkpoints(num_checkpoints, np_random, track_rad)
+                      track_rad: float, looped=False) -> Tuple[List, List[Checkpoint], List[float], List[float]]:
+        checkpoints, alphas, rads = self.checkpoints_generator\
+            .generate_checkpoints(num_checkpoints, np_random, track_rad)
         track_points = self.spline.compute(checkpoints, resolution, looped=looped)
         track = self._compute_beta(track_points)
         track_adjusted = self._adjust_points_atan_not_defined(track)
@@ -116,4 +117,4 @@ class RoadGenerator:
         track_to_return = [(track_item.alpha, track_item.beta, track_item.point.x, track_item.point.y)
                            for track_item in track_adjusted]
 
-        return track_to_return
+        return track_to_return, checkpoints, alphas, rads

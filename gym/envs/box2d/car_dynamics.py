@@ -13,7 +13,8 @@ from Box2D.b2 import (edgeShape, circleShape, fixtureDef, polygonShape, revolute
 SIZE = 0.02
 ENGINE_POWER            = 100000000*SIZE*SIZE
 WHEEL_MOMENT_OF_INERTIA = 4000*SIZE*SIZE
-FRICTION_LIMIT          = 1000000*SIZE*SIZE     # friction ~= mass ~= size^2 (calculated implicitly using density)
+# FRICTION_LIMIT          = 1000000*SIZE*SIZE     # friction ~= mass ~= size^2 (calculated implicitly using density)
+FRICTION_LIMIT          = 1500000*SIZE*SIZE     # friction ~= mass ~= size^2 (calculated implicitly using density)
 WHEEL_R  = 27
 WHEEL_W  = 14
 WHEELPOS = [
@@ -133,7 +134,8 @@ class Car:
 
             # Position => friction_limit
             grass = True
-            friction_limit = FRICTION_LIMIT*0.6  # Grass friction if no tile
+            # friction_limit = FRICTION_LIMIT*0.6  # Grass friction if no tile
+            friction_limit = FRICTION_LIMIT
             for tile in w.tiles:
                 friction_limit = max(friction_limit, FRICTION_LIMIT*tile.road_friction)
                 grass = False
