@@ -53,20 +53,23 @@ class CartPoleEnv(gym.Env):
         'video.frames_per_second' : 50
     }
 
-    def __init__(self):
+    def __init__(self, masscart: float = 1.0, masspole: float = 0.1, length: float = 0.5, 
+            discrete_action_space: bool = True, pole_angle: int = 12, x_threshold: float = 2.4):
         self.gravity = 9.8
-        self.masscart = 1.0
-        self.masspole = 0.1
+        self.masscart = masscart
+        self.masspole = masspole
+        self.length = length # actually half the pole's length
+        self.pole_angle = pole_angle
+        # Angle at which to fail the episode
+        self.theta_threshold_radians = self.pole_angle * 2 * math.pi / 360
+        self.x_threshold = x_threshold
+        self.discrete_action_space = discrete_action_space
+
         self.total_mass = (self.masspole + self.masscart)
-        self.length = 0.5 # actually half the pole's length
         self.polemass_length = (self.masspole * self.length)
         self.force_mag = 10.0
         self.tau = 0.02  # seconds between state updates
         self.kinematics_integrator = 'euler'
-
-        # Angle at which to fail the episode
-        self.theta_threshold_radians = 12 * 2 * math.pi / 360
-        self.x_threshold = 2.4
 
         # Angle limit set to 2 * theta_threshold_radians so failing observation is still within bounds
         high = np.array([
@@ -75,8 +78,13 @@ class CartPoleEnv(gym.Env):
             self.theta_threshold_radians * 2,
             np.finfo(np.float32).max])
 
-        self.action_space = spaces.Discrete(2)
-        self.observation_space = spaces.Box(-high, high, dtype=np.float32)
+        if discrete_action_space:
+            self.action_space = spaces.Discrete(2)
+        else:
+            self.action_space = spaces.Box(low=-self.force_mag, high=self.force_mag, shape=(1,), dtype=np.float32)
+
+        self.observation_space = spaces.Box(low=-high, high=high, dtype=np.float32)
+        print(self.observation_space.shape)
 
         self.seed()
         self.viewer = None
@@ -91,12 +99,15 @@ class CartPoleEnv(gym.Env):
     def step(self, action):
         assert self.action_space.contains(action), "%r (%s) invalid"%(action, type(action))
         state = self.state
-        x, x_dot, theta, theta_dot = state
-        force = self.force_mag if action==1 else -self.force_mag
+        x, x_dot, theta, theta_dot = self.state
+        if self.discrete_action_space:
+            force = self.force_mag if action==1 else -self.force_mag
+        else:
+            force = action[0]
         costheta = math.cos(theta)
         sintheta = math.sin(theta)
         temp = (force + self.polemass_length * theta_dot * theta_dot * sintheta) / self.total_mass
-        thetaacc = (self.gravity * sintheta - costheta* temp) / (self.length * (4.0/3.0 - self.masspole * costheta * costheta / self.total_mass))
+        thetaacc = (self.gravity * sintheta - costheta * temp) / (self.length * (4.0/3.0 - self.masspole * costheta * costheta / self.total_mass))
         xacc  = temp - self.polemass_length * thetaacc * costheta / self.total_mass
         if self.kinematics_integrator == 'euler':
             x  = x + self.tau * x_dot
