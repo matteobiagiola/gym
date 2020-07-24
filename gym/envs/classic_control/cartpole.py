@@ -54,15 +54,16 @@ class CartPoleEnv(gym.Env):
     }
 
     def __init__(self, masscart: float = 1.0, masspole: float = 0.1, length: float = 0.5, 
-            discrete_action_space: bool = True, pole_angle: int = 12, x_threshold: float = 2.4):
+            discrete_action_space: bool = True, manual: bool = False, cart_friction: float = 0.0):
         self.gravity = 9.8
         self.masscart = masscart
         self.masspole = masspole
         self.length = length # actually half the pole's length
-        self.pole_angle = pole_angle
+        self.cart_friction = cart_friction
+        self.pole_angle = 12
         # Angle at which to fail the episode
         self.theta_threshold_radians = self.pole_angle * 2 * math.pi / 360
-        self.x_threshold = x_threshold
+        self.x_threshold = 2.4
         self.discrete_action_space = discrete_action_space
 
         self.total_mass = (self.masspole + self.masscart)
@@ -70,6 +71,8 @@ class CartPoleEnv(gym.Env):
         self.force_mag = 10.0
         self.tau = 0.02  # seconds between state updates
         self.kinematics_integrator = 'euler'
+
+        self.manual = manual
 
         # Angle limit set to 2 * theta_threshold_radians so failing observation is still within bounds
         high = np.array([
@@ -79,12 +82,17 @@ class CartPoleEnv(gym.Env):
             np.finfo(np.float32).max])
 
         if discrete_action_space:
-            self.action_space = spaces.Discrete(2)
+            if manual:
+                self.action_space = spaces.Discrete(3)
+            else:
+                self.action_space = spaces.Discrete(2)
         else:
-            self.action_space = spaces.Box(low=-self.force_mag, high=self.force_mag, shape=(1,), dtype=np.float32)
+            self.force_mag = 30
+            self.min_action = -1
+            self.max_action = +1
+            self.action_space = spaces.Box(low=self.min_action, high=self.max_action, shape=(1,), dtype=np.float32)
 
         self.observation_space = spaces.Box(low=-high, high=high, dtype=np.float32)
-        print(self.observation_space.shape)
 
         self.seed()
         self.viewer = None
@@ -101,12 +109,21 @@ class CartPoleEnv(gym.Env):
         state = self.state
         x, x_dot, theta, theta_dot = self.state
         if self.discrete_action_space:
-            force = self.force_mag if action==1 else -self.force_mag
+            if self.manual:
+                if action == 0:
+                    force = 0.0
+                elif action == 1:
+                    force = self.force_mag
+                elif action == 2:
+                    force = -self.force_mag
+            else:
+                force = self.force_mag if action==1 else -self.force_mag
         else:
-            force = action[0]
+            force = self.force_mag * float(action[0])
         costheta = math.cos(theta)
         sintheta = math.sin(theta)
-        temp = (force + self.polemass_length * theta_dot * theta_dot * sintheta) / self.total_mass
+        # temp = (force + self.polemass_length * theta_dot * theta_dot * sintheta) / self.total_mass
+        temp = (force + self.polemass_length * theta_dot * theta_dot * sintheta - self.cart_friction * np.sign(x_dot)) / self.total_mass
         thetaacc = (self.gravity * sintheta - costheta * temp) / (self.length * (4.0/3.0 - self.masspole * costheta * costheta / self.total_mass))
         xacc  = temp - self.polemass_length * thetaacc * costheta / self.total_mass
         if self.kinematics_integrator == 'euler':
@@ -202,3 +219,82 @@ class CartPoleEnv(gym.Env):
         if self.viewer:
             self.viewer.close()
             self.viewer = None
+
+
+if __name__ == "__main__":
+
+    import time
+    import gym
+
+    # original
+    env = CartPoleEnv(masscart=1.0, masspole=0.1, length=0.5, cart_friction=0.0, manual=True)
+
+    SKIP_CONTROL = 0    # Use previous control decision SKIP_CONTROL times, that's how you
+                        # can test what skip is still usable.
+    
+    human_agent_action = 0
+    human_wants_restart = False
+    human_sets_pause = False
+
+    def key_press(key, mod):
+        global human_agent_action, human_wants_restart, human_sets_pause
+        # enter
+        if key==0xff0d: human_wants_restart = True
+        # backspace
+        if key==32: human_sets_pause = not human_sets_pause
+        a = int( key - ord('0') )
+        # left
+        if a == 65313:
+            human_agent_action = 1
+        # right
+        elif a == 65315:
+            human_agent_action = 2
+        else:
+            return
+
+    def key_release(key, mod):
+        global human_agent_action
+        a = int( key - ord('0') )
+        if a == 65313 or a == 65315:
+            # do nothing
+            human_agent_action = 0
+        else:
+            return
+
+    env.render()
+    env.unwrapped.viewer.window.on_key_press = key_press
+    env.unwrapped.viewer.window.on_key_release = key_release
+
+    def rollout(env):
+        global human_agent_action, human_wants_restart, human_sets_pause
+        human_wants_restart = False
+        obser = env.reset()
+        skip = 0
+        total_reward = 0
+        total_timesteps = 0
+        while 1:
+            if not skip:
+                #print("taking action {}".format(human_agent_action))
+                a = human_agent_action
+                total_timesteps += 1
+                skip = SKIP_CONTROL
+            else:
+                skip -= 1
+
+            obser, r, done, info = env.step(a)
+            # if r != 0:
+            #     print("reward %0.3f" % r)
+            total_reward += r
+            window_still_open = env.render()
+            if window_still_open==False: return False
+            if done: break
+            if human_wants_restart: break
+            while human_sets_pause:
+                env.render()
+                time.sleep(0.1)
+            time.sleep(0.1)
+        print("timesteps %i reward %0.2f" % (total_timesteps, total_reward))
+
+    while 1:
+        window_still_open = rollout(env)
+        if window_still_open==False: break
