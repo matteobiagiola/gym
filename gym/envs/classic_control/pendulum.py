@@ -10,17 +10,26 @@ class PendulumEnv(gym.Env):
         'video.frames_per_second' : 30
     }
 
-    def __init__(self, g=10.0):
-        self.max_speed=8
-        self.max_torque=2.
-        self.dt=.05
+    def __init__(self, g: float = 10.0, dt: float = 0.05, mass: float = 1.0, 
+        length: float = 1.0, discrete_action_space: bool = False):
+        # cannot be changed because it is part of the observation space
+        self.max_speed = 8
+        # cannot be changed because it is part of the action space
+        self.max_torque = 2.0
+        self.dt = dt
         self.g = g
-        self.m = 1.
-        self.l = 1.
+        self.m = mass
+        self.l = length
         self.viewer = None
 
+        self.discrete_action_space = discrete_action_space
+
         high = np.array([1., 1., self.max_speed])
-        self.action_space = spaces.Box(low=-self.max_torque, high=self.max_torque, shape=(1,), dtype=np.float32)
+        if self.discrete_action_space:
+            self.action_space = spaces.Discrete(2)
+        else:
+            self.action_space = spaces.Box(low=-self.max_torque, high=self.max_torque, shape=(1,), dtype=np.float32)
+
         self.observation_space = spaces.Box(low=-high, high=high, dtype=np.float32)
 
         self.seed()
@@ -37,7 +46,11 @@ class PendulumEnv(gym.Env):
         l = self.l
         dt = self.dt
 
-        u = np.clip(u, -self.max_torque, self.max_torque)[0]
+        if self.discrete_action_space:
+            u = self.max_torque if u==1 else -self.max_torque
+        else:
+            u = np.clip(u, -self.max_torque, self.max_torque)[0]
+
         self.last_u = u # for rendering
         costs = angle_normalize(th)**2 + .1*thdot**2 + .001*(u**2)
 
