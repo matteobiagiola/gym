@@ -16,6 +16,7 @@ class PendulumEnv(gym.Env):
         self.max_speed = 8
         # cannot be changed because it is part of the action space
         self.max_torque = 2.0
+        
         self.dt = dt
         self.g = g
         self.m = mass
