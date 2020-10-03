@@ -28,23 +28,34 @@ class Continuous_MountainCarEnv(gym.Env):
         'video.frames_per_second': 30
     }
 
-    def __init__(self, goal_velocity = 0):
+    def __init__(self, goal_position: float = 0.5, gravity: float = 0.0025, force: float = 0.001, manual: bool = False):
         self.min_action = -1.0
         self.max_action = 1.0
         self.min_position = -1.2
         self.max_position = 0.6
         self.max_speed = 0.07
+
+        self.manual = manual
+
         self.goal_position = 0.45 # was 0.5 in gym, 0.45 in Arnaud de Broissia's version
-        self.goal_velocity = goal_velocity
-        self.power = 0.0015
+        # self.goal_position = 0.5 # was 0.5 in gym, 0.45 in Arnaud de Broissia's version
+        # self.goal_velocity = goal_velocity
+        self.goal_velocity = 0
+        # self.power = 0.0015
+        self.power = 0.001
+        self.gravity = 0.0025
 
         self.low_state = np.array([self.min_position, -self.max_speed])
         self.high_state = np.array([self.max_position, self.max_speed])
 
         self.viewer = None
 
-        self.action_space = spaces.Box(low=self.min_action, high=self.max_action,
-                                       shape=(1,), dtype=np.float32)
+        if self.manual:
+            self.action_space = spaces.Discrete(3)
+        else:
+            self.action_space = spaces.Box(low=self.min_action, high=self.max_action,
+                                           shape=(1,), dtype=np.float32)
+
         self.observation_space = spaces.Box(low=self.low_state, high=self.high_state,
                                             dtype=np.float32)
 
@@ -59,9 +70,26 @@ class Continuous_MountainCarEnv(gym.Env):
 
         position = self.state[0]
         velocity = self.state[1]
-        force = min(max(action[0], -1.0), 1.0)
 
-        velocity += force*self.power -0.0025 * math.cos(3*position)
+        if self.manual:
+            if action == 0:
+                # do nothing
+                force = 0
+                action = 0
+            else:
+                if action == 1:
+                    # left
+                    action = self.min_action
+                elif action == 2:
+                    # right
+                    action = self.max_action
+
+                force = min(max(action, -1.0), 1.0)
+        else:
+            force = min(max(action[0], -1.0), 1.0)
+
+        # velocity += force*self.power -0.0025 * math.cos(3*position)
+        velocity += force*self.power -self.gravity * math.cos(3*position)
         if (velocity > self.max_speed): velocity = self.max_speed
         if (velocity < -self.max_speed): velocity = -self.max_speed
         position += velocity
@@ -74,7 +102,11 @@ class Continuous_MountainCarEnv(gym.Env):
         reward = 0
         if done:
             reward = 100.0
-        reward-= math.pow(action[0],2)*0.1
+
+        if self.manual:
+            reward-= math.pow(action,2)*0.1
+        else:
+            reward-= math.pow(action[0],2)*0.1
 
         self.state = np.array([position, velocity])
         return self.state, reward, done, {}
@@ -147,3 +179,81 @@ class Continuous_MountainCarEnv(gym.Env):
         if self.viewer:
             self.viewer.close()
             self.viewer = None
+
+if __name__ == "__main__":
+    import time
+    import gym
+
+    # original
+    env = Continuous_MountainCarEnv(manual=True)
+
+    SKIP_CONTROL = 0    # Use previous control decision SKIP_CONTROL times, that's how you
+                        # can test what skip is still usable.
+    
+    human_agent_action = 0
+    human_wants_restart = False
+    human_sets_pause = False
+
+    def key_press(key, mod):
+        global human_agent_action, human_wants_restart, human_sets_pause
+        # enter
+        if key==0xff0d: human_wants_restart = True
+        # backspace
+        if key==32: human_sets_pause = not human_sets_pause
+        a = int( key - ord('0') )
+        # left
+        if a == 65313:
+            human_agent_action = 1
+        # right
+        elif a == 65315:
+            human_agent_action = 2
+        else:
+            return
+
+    def key_release(key, mod):
+        global human_agent_action
+        a = int( key - ord('0') )
+        if a == 65313 or a == 65315:
+            # do nothing
+            human_agent_action = 0
+        else:
+            return
+
+    env.reset()
+    env.render()
+    env.unwrapped.viewer.window.on_key_press = key_press
+    env.unwrapped.viewer.window.on_key_release = key_release
+
+    def rollout(env):
+        global human_agent_action, human_wants_restart, human_sets_pause
+        human_wants_restart = False
+        obser = env.reset()
+        skip = 0
+        total_reward = 0
+        total_timesteps = 0
+        while 1:
+            if not skip:
+                #print("taking action {}".format(human_agent_action))
+                a = human_agent_action
+                total_timesteps += 1
+                skip = SKIP_CONTROL
+            else:
+                skip -= 1
+
+            obser, r, done, info = env.step(a)
+            # if r != 0:
+            #     print("reward %0.3f" % r)
+            total_reward += r
+            window_still_open = env.render()
+            if window_still_open==False: return False
+            if done: break
+            if human_wants_restart: break
+            while human_sets_pause:
+                env.render()
+                time.sleep(0.1)
+            time.sleep(0.1)
+        print("timesteps %i reward %0.2f" % (total_timesteps, total_reward))
+
+    while 1:
+        window_still_open = rollout(env)
+        if window_still_open==False: break
