@@ -83,12 +83,42 @@ class AcrobotEnv(core.Env):
     domain_fig = None
     actions_num = 3
 
-    def __init__(self):
+    def __init__(self, 
+            discrete_action_space: bool = False, 
+            manual: bool = False,
+            link_length_1: float = 1.0, 
+            link_mass_1: float = 1.0, 
+            link_mass_2: float = 1.0, 
+            link_com_pos_1: float = 0.5, 
+            link_com_pos_2: float = 0.5, 
+            link_moi: float = 1.0
+        ):
+
         self.viewer = None
+
+        self.LINK_LENGTH_1 = link_length_1  # [m]
+        # seems to have no effect on rewards in any direction (towards 0 nor towards inf)
+        # self.LINK_LENGTH_2 = link_length_2  # [m]
+        self.LINK_LENGTH_2 = 1.0
+        self.LINK_MASS_1 = link_mass_1  #: [kg] mass of link 1
+        self.LINK_MASS_2 = link_mass_2  #: [kg] mass of link 2
+        self.LINK_COM_POS_1 = link_com_pos_1  #: [m] position of the center of mass of link 1
+        self.LINK_COM_POS_2 = link_com_pos_2  #: [m] position of the center of mass of link 2
+        self.LINK_MOI = link_moi  #: moments of inertia for both links
+
+        # MAX_VEL_1 and MAX_VEL_2 cannot be changed because they are part of the observation space
         high = np.array([1.0, 1.0, 1.0, 1.0, self.MAX_VEL_1, self.MAX_VEL_2])
         low = -high
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
-        self.action_space = spaces.Discrete(3)
+
+        if discrete_action_space or manual:
+            self.action_space = spaces.Discrete(3)
+        else:
+            # look at the AVAIL_TORQUE param
+            self.action_space = spaces.Box(low=-1, high=+1, shape=(1,), dtype=np.float32)
+
+        self.discrete_action_space = discrete_action_space
+        self.manual = manual
         self.state = None
         self.seed()
 
@@ -102,7 +132,12 @@ class AcrobotEnv(core.Env):
 
     def step(self, a):
         s = self.state
-        torque = self.AVAIL_TORQUE[a]
+
+        if self.discrete_action_space or self.manual:
+            torque = self.AVAIL_TORQUE[a]
+        else:
+            torque = a
+
 
         # Add noise to the force action
         if self.torque_noise_max > 0:
@@ -303,3 +338,81 @@ def rk4(derivs, y0, t, *args, **kwargs):
         k4 = np.asarray(derivs(y0 + dt * k3, thist + dt, *args, **kwargs))
         yout[i + 1] = y0 + dt / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
     return yout
+
+if __name__ == "__main__":
+    import time
+    import gym
+
+    # original
+    env = AcrobotEnv(manual=True)
+
+    SKIP_CONTROL = 0    # Use previous control decision SKIP_CONTROL times, that's how you
+                        # can test what skip is still usable.
+    
+    human_agent_action = 0
+    human_wants_restart = False
+    human_sets_pause = False
+
+    def key_press(key, mod):
+        global human_agent_action, human_wants_restart, human_sets_pause
+        # enter
+        if key==0xff0d: human_wants_restart = True
+        # backspace
+        if key==32: human_sets_pause = not human_sets_pause
+        a = int( key - ord('0') )
+        # left
+        if a == 65313:
+            human_agent_action = 1
+        # right
+        elif a == 65315:
+            human_agent_action = 2
+        else:
+            return
+
+    def key_release(key, mod):
+        global human_agent_action
+        a = int( key - ord('0') )
+        if a == 65313 or a == 65315:
+            # do nothing
+            human_agent_action = 0
+        else:
+            return
+
+    env.reset()
+    env.render()
+    env.unwrapped.viewer.window.on_key_press = key_press
+    env.unwrapped.viewer.window.on_key_release = key_release
+
+    def rollout(env):
+        global human_agent_action, human_wants_restart, human_sets_pause
+        human_wants_restart = False
+        obser = env.reset()
+        skip = 0
+        total_reward = 0
+        total_timesteps = 0
+        while 1:
+            if not skip:
+                # print("taking action {}".format(human_agent_action))
+                a = human_agent_action
+                total_timesteps += 1
+                skip = SKIP_CONTROL
+            else:
+                skip -= 1
+
+            obser, r, done, info = env.step(a)
+            # if r != 0:
+            #     print("reward %0.3f" % r)
+            total_reward += r
+            window_still_open = env.render()
+            if window_still_open==False: return False
+            if done: break
+            if human_wants_restart: break
+            while human_sets_pause:
+                env.render()
+                time.sleep(0.1)
+            time.sleep(0.1)
+        print("timesteps %i reward %0.2f" % (total_timesteps, total_reward))
+
+    while 1:
+        window_still_open = rollout(env)
+        if window_still_open==False: break

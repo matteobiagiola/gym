@@ -17,7 +17,7 @@ class MountainCarEnv(gym.Env):
         'video.frames_per_second': 30
     }
 
-    def __init__(self, goal_position: float = 0.5, gravity: float = 0.0025, force: float = 0.001, manual: bool = False, discrete_action_space: bool = True):
+    def __init__(self, goal_velocity: float = 0.0, gravity: float = 0.0025, force: float = 0.001, manual: bool = False, discrete_action_space: bool = True):
         # cannot be changed since these params are part of the observation space
         self.min_position = -1.2
         self.max_position = 0.6
@@ -30,8 +30,8 @@ class MountainCarEnv(gym.Env):
         # force: [0.0005, 0.001]
         # gravity: [0.0025, 0.005]
 
-        self.goal_position = goal_position
-        self.goal_velocity = 0.0
+        self.goal_position = 0.5
+        self.goal_velocity = goal_velocity
 
         self.discrete_action_space = discrete_action_space
         self.manual = manual
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     import gym
 
     # original
-    env = MountainCarEnv(manual=True, gravity=0.005)
+    env = MountainCarEnv(manual=True, goal_velocity=0.06)
 
     SKIP_CONTROL = 0    # Use previous control decision SKIP_CONTROL times, that's how you
                         # can test what skip is still usable.
