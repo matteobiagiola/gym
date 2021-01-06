@@ -87,10 +87,7 @@ class CartPoleEnv(gym.Env):
             else:
                 self.action_space = spaces.Discrete(2)
         else:
-            self.force_mag = 30
-            self.min_action = -1
-            self.max_action = +1
-            self.action_space = spaces.Box(low=self.min_action, high=self.max_action, shape=(1,), dtype=np.float32)
+            self.action_space = spaces.Box(low=-self.force_mag, high=self.force_mag, shape=(1,), dtype=np.float32)
 
         self.observation_space = spaces.Box(low=-high, high=high, dtype=np.float32)
 
